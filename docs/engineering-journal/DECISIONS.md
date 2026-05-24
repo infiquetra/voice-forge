@@ -1,0 +1,101 @@
+# Decisions — voice-forge
+
+> **ADR-style records of architectural / prompt-design / process choices.** When you commit a chosen path over alternatives — pick A over B, flip a flag, change a threshold — capture rationale + tradeoff + revisit-when condition + commit hash.
+>
+> The point is to make **revisit conditions explicit** so a future contributor reading "why did we pick X?" gets the answer cold, including when it would be right to reconsider.
+>
+> **Append new entries to the top.** Format:
+>
+> ```markdown
+> ## YYYY-MM-DD
+>
+> ### Short title (commit hash)
+>
+> **Decision.** What we picked.
+> **Rejected alternatives.** What we considered and didn't pick.
+> **Rationale.** Why this won.
+> **Revisit when.** Condition that would change the calculus.
+> ```
+>
+> When new evidence invalidates a decision, **update inline AND move the pre-correction version to `ARCHIVE.md` as SUPERSEDED**.
+
+---
+
+## 2026-05-24
+
+### Apache 2.0 license (initial commit)
+
+**Decision.** Public Apache-2.0 for voice-forge code. Same license as NeuTTS Air (the v0 backend dependency).
+
+**Rejected alternatives.**
+- MIT: lacks patent grant; for an ML project building on speech-token / audio-codec patents, contributor patent grant is meaningful protection.
+- BSD 3-Clause: same gap as MIT.
+- MPL-2.0 (Coqui's choice): file-level copyleft adds friction for closed-source users; ecosystem standard is Apache for Python ML.
+- GPL-3.0 (Piper's choice): strong copyleft kills commercial adoption.
+- AGPL-3.0 (OpenedAI-Speech's choice): SaaS clause; many companies blanket-ban; OpenedAI is also now archived.
+- Custom license: adoption tanks if people have to read it.
+
+**Rationale.** Apache 2.0 is the de facto standard for Python ML projects (NeuTTS, HuggingFace transformers, TensorFlow, FastAPI ecosystem). Aligning license tier with deps removes user friction. Patent grant matters here. Permissive enough to support enterprise adoption. Future dual-licensing remains an option if we ever want a commercial tier.
+
+**Revisit when.** If voice-forge ever wants to force commercial users into a "buy a license OR open-source" choice (Redis/MongoDB-style business model). Default position: no.
+
+**Refs.** [docs/PRIOR_ART.md § License compatibility quick reference](../PRIOR_ART.md). Home-lab DECISIONS 2026-05-24 "Spin TTS out of home-lab into infiquetra/voice-forge (public, Apache-2)".
+
+### Q8 GGUF default for NeuTTS backend; BF16 deferred
+
+**Decision.** When the NeuTTS backend ships (Phase D), the default model is `neuphonic/neutts-air-q8-gguf`. BF16 is opt-in via config.
+
+**Rejected alternatives.**
+- BF16 full precision: half the click rate but 4× slower (RTF 1.76 vs 0.30 on M4 Pro CPU). Same long-narrative quality limit. Slow enough to be unusable for conversational use.
+- Q4: fastest (RTF 0.27) but voice quality cost is audible.
+
+**Rationale.** Q8 balances voice quality and synth speed. BF16's click-reduction is real but irrelevant given (a) the 4× speed cost and (b) the long-narrative degradation affects BF16 equally (model-capacity limit, not precision limit).
+
+**Revisit when.** A dedicated TTS host with GPU (Mac Studio, Linux box with NVIDIA) makes BF16 RTF acceptable, OR if a backend swap (F5/XTTS) renders this question moot.
+
+**Refs.** Home-lab LEARNINGS 2026-05-24 "NeuTTS-Air degrades into incoherent phonemes". Same DECISIONS in home-lab DECISIONS.md.
+
+### Batch mode default in voice-forge client; streaming opt-in
+
+**Decision.** voice-forge's HTTP client (and CLI) default to **batch synthesis**. Streaming is opt-in via `stream: true` request field or env var.
+
+**Rejected alternatives.**
+- Streaming default (latency win): confirmed 15-21% content loss on long inputs in home-lab measurements. Too much risk for default behavior.
+- Length-based auto-switch: cliff is fuzzy and would confuse debugging.
+
+**Rationale.** Predictable batch that produces all content reliably > sometimes-faster streaming that drops content. Streaming stays as opt-in for experiments. v0.2 may flip this back once the content-loss is investigated.
+
+**Revisit when.** [QUEUED: "NeuTTS streaming content-loss investigation"](QUEUED.md) is resolved and the gap is closed.
+
+**Refs.** Home-lab LEARNINGS 2026-05-24 "NeuTTS streaming drops 15-21%". [PRIOR_ART.md](../PRIOR_ART.md).
+
+### Pluggable backend architecture: Protocol + VoiceRef union
+
+**Decision.** Backend abstraction is a `TTSBackend` Protocol (not ABC) with a `VoiceRef` union dataclass (fields: `ref_audio_path | preset_id | encoded_codes | ref_text | metadata`). Each backend reads only what it needs.
+
+**Rejected alternatives.**
+- Abstract Base Class (ABC) — works but forces inheritance; less plugin-friendly for third-party backends in separate packages.
+- Tagged-union types via `Literal` discriminators — more boilerplate without measurable benefit.
+- Separate Protocol per backend family — adds complexity; current design handles NeuTTS / F5 / XTTS / Kokoro / Kitten / Dia uniformly.
+
+**Rationale.** Protocol-based design lets backends live in third-party packages without depending on voice-forge directly. `VoiceRef` union handles real variance seen in the wild (NeuTTS uses codes+ref_text; XTTS/F5 use ref_audio_path; Kokoro/Kitten use preset_id; Dia uses ref_audio_path as audio-prompt). Validated against Phase B prior-art research.
+
+**Revisit when.** If a backend's API genuinely doesn't fit the Protocol (e.g., a streaming-only model that can't do batch), expand the Protocol with optional methods. The Protocol shape can grow without breaking existing backends.
+
+**Refs.** [docs/ARCHITECTURE.md § Core abstractions](../ARCHITECTURE.md). [docs/PRIOR_ART.md § What we deliberately did NOT borrow](../PRIOR_ART.md).
+
+### REST + chunked HTTP transfer (WebSocket / Wyoming deferred to v0.2)
+
+**Decision.** v0 surface is REST with `POST /v1/audio/speech` (OpenAI-compatible). Streaming via chunked HTTP transfer (`Transfer-Encoding: chunked`) when `stream: true`. WebSocket bidirectional streaming and Wyoming protocol adapter are tracked for v0.2.
+
+**Rejected alternatives.**
+- gRPC: lower latency but adds toolchain complexity; not standard for this use case.
+- WebSocket-first: bidirectional adds value for chat use cases but doubles the API surface in v0.
+- Wyoming-first: locks us into the Home Assistant ecosystem rather than open ecosystem.
+- Unix-socket-only: ties us to single-host deploys; HTTP unlocks remote.
+
+**Rationale.** HTTP/REST is the lingua franca for service integration. Sub-2ms HTTP overhead is irrelevant when synthesis takes seconds. OpenAI-compatible endpoint shape lets clients use the OpenAI SDK out-of-the-box (matches what Kokoro-FastAPI and OpenedAI-Speech demonstrated works in practice).
+
+**Revisit when.** v0.2 — add WebSocket for chat use cases + Wyoming for Home Assistant integration. Both are additive (don't break REST).
+
+**Refs.** [docs/ARCHITECTURE.md](../ARCHITECTURE.md). [docs/PRIOR_ART.md § Decisions for voice-forge informed by this survey](../PRIOR_ART.md).
