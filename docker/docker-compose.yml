@@ -1,0 +1,20 @@
+# Single-host docker-compose for voice-forge.
+# Phase D will add volume mounts for the voice registry + tuning options.
+
+services:
+  voice-forge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "127.0.0.1:9876:9876"
+    volumes:
+      # Persist voice registry across container restarts
+      - voice-forge-registry:/root/.voice-forge
+    environment:
+      - VOICE_FORGE_DEFAULT_BACKEND=neutts
+      - VOICE_FORGE_LOG_LEVEL=info
+    restart: unless-stopped
+
+volumes:
+  voice-forge-registry:
