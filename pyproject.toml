@@ -30,6 +30,7 @@ dependencies = [
     "soundfile>=0.12",
     "pyyaml>=6.0",
     "click>=8.1",
+    "python-multipart>=0.0.9",  # FastAPI File/Form deps
 ]
 
 [project.optional-dependencies]
@@ -64,6 +65,10 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's Form/File/Depends() in arg defaults is idiomatic, not a B008 violation.
+"src/voice_forge/server.py" = ["B008"]
 
 [tool.black]
 target-version = ["py311"]

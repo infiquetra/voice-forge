@@ -9,8 +9,9 @@ See docs/ARCHITECTURE.md § "Core abstractions" for the full design.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 
