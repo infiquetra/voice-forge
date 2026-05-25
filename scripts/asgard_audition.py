@@ -172,6 +172,9 @@ def _synthesize(
                     info["first_audio_ms"] = (time.monotonic() - t0) * 1000
                     first_pcm_seen = True
         audio_bytes = b"".join(chunks)
+        # Belt-and-suspenders: if a sibling process raced and removed the
+        # output dir between main()'s mkdir and now, re-create before write.
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(audio_bytes)
         info["bytes"] = len(audio_bytes)
         info["total_s"] = time.monotonic() - t0

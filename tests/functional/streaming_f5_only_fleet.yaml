@@ -1,0 +1,11 @@
+# F5-only mini-fleet for proving the sentence chunker.
+#
+# saga-comms-f5 was tuned (via `voice-forge voice tune saga-comms-f5
+# --sampling stream_chunk_chars=200`) so each sentence becomes its own chunk.
+# Stream first-audio should now arrive at sentence 1 boundary instead of
+# at full-utterance boundary.
+- id: saga
+  display_name: "Saga · F5 (tuned: 200-char chunks)"
+  voice_id: saga-comms-f5
+  backend: f5
+  target_agent: Loki

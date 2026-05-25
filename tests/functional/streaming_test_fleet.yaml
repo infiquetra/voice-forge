@@ -1,0 +1,25 @@
+# Streaming A/B mini-fleet — used by `scripts/asgard_audition.py --mode both`.
+#
+# Intent: prove the layer-1 chunker change does NOT degrade audio quality vs
+# batch synth, and that first-byte latency drops on multi-sentence prompts.
+#
+# Two voices on the same text (Saga's responses):
+#   - saga-comms-f5 → F5 cloning backend; this is where the new
+#     sentence-chunked synthesize_stream() actually changes behavior. Batch
+#     synth waits for the full utterance; stream yields one chunk per
+#     sentence. p2 / p3 are multi-sentence so the chunker kicks in.
+#   - kokoro-bella → Kokoro preset backend; KPipeline streams natively,
+#     so this is the control row. Confirms the harness's first-byte timing
+#     is sane.
+
+- id: saga
+  display_name: "Saga · F5 clone (streaming A/B)"
+  voice_id: saga-comms-f5
+  backend: f5
+  target_agent: Loki
+
+- id: saga
+  display_name: "Saga's text · Kokoro af_bella (streaming A/B control)"
+  voice_id: kokoro-bella
+  backend: kokoro
+  target_agent: Loki

@@ -48,6 +48,16 @@ f5 = [
     # F5-TTS backend (PyTorch + MPS-capable diffusion; voice cloning).
     # Wrapper is MIT-licensed; model weights from SWivid/F5-TTS are Apache-2.
     "f5-tts>=1.1,<2.0",
+    # torch + torchaudio + torchcodec ABI lockstep:
+    # torchaudio 2.9 hard-removes the soundfile-backed `load()` and routes
+    # everything through torchcodec. torchcodec 0.8+ for torch 2.9.x is
+    # currently shipping with a libtorch_cpu symbol mismatch on macOS
+    # (`_aoti_torch_aten_subtract_Tensor` not found). torch 2.8.0 +
+    # torchaudio 2.8.0 + torchcodec 0.7.0 is the last verified-working
+    # trio on this host — pin it explicitly until upstream resolves the ABI.
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
+    "torchcodec>=0.7,<0.8",
 ]
 xtts = [
     # XTTS-v2 backend via Coqui idiap fork (MPL-2.0; multilingual + cloning).
