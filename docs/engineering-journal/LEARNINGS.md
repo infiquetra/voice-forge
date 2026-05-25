@@ -27,6 +27,35 @@
 
 ## 2026-05-25
 
+### Streaming wins are only as good as the weakest link — hermes' Discord adapter is the real bottleneck
+
+**Context.** voice-forge shipped two streaming surfaces (HTTP layer-1 chunked, WS layer-2) that drop F5 first-audio from 60+ s to ~3 s on long-form text. Open question: does that win actually reach the listener at the *consuming* end of the chain (hermes-agent → Discord)? Spoiler: today, no — the adapter buffers everything back to disk before Discord ever sees a frame.
+
+**Evidence.** Audit of the home-lab repo (`infiquetra/home-lab`), specifically:
+
+- `ansible/roles/hermes_neutts_daemon/files/neutts_synth.py` lines 44-90 — hermes-agent's TTS adapter POSTs to `voice-forge/v1/audio/speech` with `stream: false`, then writes the *full* WAV response to a temp file (`out_path.write_bytes(audio_bytes)`).
+- `tools/tts_tool.py` (in the agent gateway) — runs `ffmpeg WAV→MP3 -b:a 192k` to a second temp file.
+- `discord.py::FFmpegPCMAudio(mp3_path)` then accepts that *file path* and pushes PCM-to-Opus frames to the Discord voice channel UDP gateway.
+
+The final stretch (Opus encoding via libsodium + UDP push) IS real-time and IS streaming-capable. But the input to that stretch is a fully-buffered file on disk — every saved millisecond from voice-forge's WS surface gets erased waiting for the disk write to complete.
+
+**Mechanism.** discord.py's `FFmpegPCMAudio` constructor accepts either a *path* or a *pipe/file-like* via its `pipe=True` flag. Hermes-agent's adapter is wired to the path variant because that's what the original Piper/edge-TTS integration assumed (both produced complete files quickly). When NeuTTS replaced those, the adapter kept the file shape — there was no reason to revisit until a streaming-capable backend showed up downstream. Now that voice-forge has WS-streaming PCM, the path-based shape is the bottleneck.
+
+**Fix (queued).** Two changes in hermes-agent (NOT voice-forge), tracked together in QUEUED 2026-05-25 § "Wire voice-forge streaming into hermes-agent Discord adapter":
+
+1. Replace `FFmpegPCMAudio(mp3_path)` with either `FFmpegPCMAudio(pipe=True, source=<pcm-stream>)` (FFmpeg does PCM→Opus) or a custom `discord.AudioSource` subclass that reads PCM frames straight off the voice-forge WS and yields Opus frames directly (bypasses FFmpeg).
+2. Have hermes-agent forward LLM tokens to voice-forge's WS *as they arrive* from the LLM, instead of buffering the full LLM reply before POSTing.
+
+End-to-end win after both changes: first audio in ~3-5 s after the LLM emits its first token, regardless of total reply length. Today it's `LLM_total_time + F5_full_synth + Discord_upload` — typically 60-120 s on long replies.
+
+**What surprised.** I expected "mode (B)" (voice-channel push) to be the streaming-capable path and "mode (A)" (file attachment) to be the file-shaped one. But mode (B) can *also* be file-shaped if the adapter's input is a file path — the Discord-side transport is real-time but the producer side is buffered. Streaming-vs-file is a property of the entire chain, not just the last transport.
+
+**Generalizable rule.** When auditing whether a streaming optimization actually reaches the user, trace the chain end-to-end and look for *every* place where the input shape changes from "stream" to "file" (or vice versa). Each conversion is a buffering point that erases streaming wins upstream of it. The Discord voice gateway is a stream; voice-forge's WS endpoint emits a stream; but the disk-backed adapter between them collapses the chain to "wait for the full thing." A streaming server with a file-based client is just a slow batch server.
+
+**Refs.** QUEUED 2026-05-25 § "Wire voice-forge streaming into hermes-agent Discord adapter" (P2, depends on us not voice-forge). `infiquetra/home-lab` paths cited above. Earlier hermes integration LEARNING 2026-05-24 documents the original NeuTTS → Discord path for context.
+
+---
+
 ### F5 nfe_step=16 is audibly equivalent to 32 on long-form narrative (on Mac Studio)
 
 **Context.** F5-TTS is a diffusion model: each synth pass runs N denoising steps over the entire sentence's mel-spectrogram, and each step is one model forward pass. `nfe_step` ("number of function evaluations") is the knob. Upstream default is 32 — picked for batch-quality use. The streaming use case wants every saved millisecond of first-audio latency; halving the steps roughly halves synth wall-time. The open question was *whether* halving costs perceptible quality.

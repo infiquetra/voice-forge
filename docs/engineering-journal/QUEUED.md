@@ -204,6 +204,23 @@ Ideal end state: when you audition a sister and it sounds wrong, you tweak her m
 
 ---
 
+## P2 — Wire voice-forge streaming into hermes-agent Discord adapter (consumer-side work)
+
+**Priority.** P2 — table stakes for the hermes integration to actually deliver the streaming win we shipped.
+
+**Effort.** Two changes in `infiquetra/home-lab` (hermes-agent code, not voice-forge):
+
+1. **Stream-input Discord adapter** (~half day for pipe variant; ~1-2 days for custom `AudioSource`). Replace `discord.py::FFmpegPCMAudio(mp3_path)` with either:
+   - `FFmpegPCMAudio(pipe=True, source=<pcm-fed-pipe>)` — voice-forge WS → buffer → pipe → FFmpeg PCM→Opus → Discord
+   - Custom `discord.AudioSource` subclass that yields Opus frames directly from voice-forge's WS frames (bypasses FFmpeg)
+2. **Forward LLM token stream to voice-forge WS** (~half day). Currently hermes-agent's TTS adapter waits for the full LLM reply, then POSTs to `/v1/audio/speech` with `stream: false`. Switch to opening a WS connection at LLM-stream start, pushing each token chunk as a `{"text": "..."}` frame. SentenceBuffer drains complete sentences as they form on the voice-forge side.
+
+**Worth it when.** Whenever hermes-agent voice latency becomes a felt problem in production — current path is ~60-120 s on long replies; after both changes, ~3-5 s to first word.
+
+**Context.** Detailed audit + mechanism in [LEARNINGS 2026-05-25 § "Streaming wins are only as good as the weakest link"](LEARNINGS.md). The voice-forge side is done — both streaming surfaces shipped + verified live (commits `5c144c8`, `694b0fe`, `eab204c`). The remaining work is entirely on the consumer side. Effort estimate assumes hermes-agent's TTS tool + Discord adapter are accessible; if either is more entangled than the audit suggests, scope grows.
+
+---
+
 ## P2 — WebSocket bidirectional streaming (`WS /tts/stream`) — layer 2 of streaming
 
 **Priority.** P2 — adds value for chat / real-time use cases.
