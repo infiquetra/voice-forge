@@ -34,7 +34,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .backends import available_backends, get_backend
+from .backends import available_backends, get_backend, known_backends, load_backend_module
 from .registry import Registry
 
 logger = logging.getLogger("voice_forge")
@@ -60,11 +60,21 @@ def _ensure_backend(name: str, config: dict | None = None):
     """Lazy-load + cache backend instances. One per backend name per process."""
     if name in _BACKENDS:
         return _BACKENDS[name]
-    # Trigger import so the backend class auto-registers
-    if name == "neutts":
-        from .backends import neutts  # noqa: F401
-    else:
-        raise HTTPException(status_code=503, detail=f"backend {name!r} not available in this build")
+    try:
+        load_backend_module(name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"unknown backend: {name!r}; known: {known_backends()}",
+        ) from exc
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"backend {name!r} known but not installed; "
+                f"install with `pip install voice-forge-tts[{name}]` ({exc})"
+            ),
+        ) from exc
     backend_cls = get_backend(name)
     backend = backend_cls()
     logger.info("loading backend %s ...", name)

@@ -22,15 +22,30 @@ import click
 import numpy as np
 
 from . import __version__
+from .backends import known_backends, load_backend_module
 
 
-def _import_backend(backend_name: str):
-    """Import a backend module to trigger its register_backend() call."""
-    if backend_name == "neutts":
-        from .backends import neutts  # noqa: F401 — triggers register
-    # Add other backend imports here as they ship
-    else:
-        click.echo(f"Unknown backend: {backend_name}", err=True)
+def _load_backend_or_exit(backend_name: str) -> None:
+    """Import the named backend module; sys.exit(2) with a friendly message on failure.
+
+    Used by CLI commands that absolutely need the backend (synth). The `health`
+    command catches the underlying KeyError/ImportError directly so it can keep
+    reporting state even when a backend isn't installed.
+    """
+    try:
+        load_backend_module(backend_name)
+    except KeyError:
+        click.echo(
+            f"error: unknown backend {backend_name!r}; known: {known_backends()}",
+            err=True,
+        )
+        sys.exit(2)
+    except ImportError as exc:
+        click.echo(
+            f"error: backend {backend_name!r} known but not installed; "
+            f"install with `pip install voice-forge-tts[{backend_name}]` ({exc})",
+            err=True,
+        )
         sys.exit(2)
 
 
@@ -113,7 +128,7 @@ def synth(voice_id: str, text: str, out_path: str | None) -> None:
         )
         sys.exit(1)
 
-    _import_backend(ref.backend)
+    _load_backend_or_exit(ref.backend)
     from .backends import get_backend
 
     backend_cls = get_backend(ref.backend)
@@ -334,11 +349,13 @@ def health() -> None:
     from .backends import available_backends
     from .registry import Registry
 
-    # Trigger backend module imports so they self-register
-    try:
-        _import_backend("neutts")
-    except SystemExit:
-        pass  # Backend missing is fine for a health check
+    # Trigger backend module imports so they self-register. Missing-backend
+    # is fine for a health check — we still want to report what IS available.
+    for backend_name in known_backends():
+        try:
+            load_backend_module(backend_name)
+        except (KeyError, ImportError):
+            pass
 
     registry = Registry()
     info = {

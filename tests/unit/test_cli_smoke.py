@@ -41,8 +41,10 @@ def test_voices_command_empty_registry(tmp_registry):
 
 def test_health_command_structure(tmp_registry, monkeypatch):
     runner = CliRunner()
-    # Don't trigger backend module import side-effects from a missing neutts
-    monkeypatch.setattr("voice_forge.cli._import_backend", lambda *a, **k: None)
+    # Don't trigger real backend imports (neutts/kokoro may not be installed
+    # in test env). The CLI's `health` command iterates known_backends() and
+    # imports each; monkeypatch the imported-name in the cli module.
+    monkeypatch.setattr("voice_forge.cli.load_backend_module", lambda *a, **k: None)
     result = runner.invoke(main, ["health"])
     assert result.exit_code == 0
     assert "version" in result.output

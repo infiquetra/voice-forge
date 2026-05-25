@@ -9,6 +9,7 @@ See docs/ARCHITECTURE.md § "Core abstractions" for the full design.
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
@@ -77,8 +78,18 @@ class TTSBackend(Protocol):
         ...
 
 
-# Registry of installed backends. Phase D populates this with actual classes.
+# Registry of installed backend classes, populated by register_backend()
+# at import time of each backend module.
 _REGISTRY: dict[str, type[TTSBackend]] = {}
+
+# Name → module-path map. Adding a new backend means: drop a module under
+# this package, call register_backend(name, cls) at module top-level, and
+# add an entry here. Kept explicit (not entry-points) so the supported set
+# is grep-able from the source tree.
+_BACKEND_MODULES: dict[str, str] = {
+    "neutts": "voice_forge.backends.neutts",
+    "kokoro": "voice_forge.backends.kokoro",
+}
 
 
 def register_backend(name: str, backend_cls: type[TTSBackend]) -> None:
@@ -94,3 +105,21 @@ def get_backend(name: str) -> type[TTSBackend]:
 def available_backends() -> list[str]:
     """List names of registered backends."""
     return sorted(_REGISTRY.keys())
+
+
+def known_backends() -> list[str]:
+    """List names of backends voice-forge knows about (even if not yet imported)."""
+    return sorted(_BACKEND_MODULES.keys())
+
+
+def load_backend_module(name: str) -> None:
+    """Import a known backend module to trigger its ``register_backend()`` side effect.
+
+    Raises:
+        KeyError: ``name`` is not in ``_BACKEND_MODULES``.
+        ImportError: the module exists in the map but its optional deps are
+            not installed (e.g. ``pip install voice-forge-tts[kokoro]`` not run).
+    """
+    if name not in _BACKEND_MODULES:
+        raise KeyError(f"unknown backend: {name!r}; known backends: {sorted(_BACKEND_MODULES)}")
+    importlib.import_module(_BACKEND_MODULES[name])

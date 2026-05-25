@@ -98,6 +98,17 @@ strict_optional = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 
+[[tool.mypy.overrides]]
+# Third-party packages without py.typed markers / shipped stubs. We don't
+# control them; suppress import-not-found / missing-stub noise.
+# PR 3 (Kokoro backend) will add "kokoro" + "kokoro.*" here.
+module = [
+    "neutts",
+    "llama_cpp",
+    "faster_whisper",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

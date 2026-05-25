@@ -216,7 +216,12 @@ class NeuTTSBackend:
             )
         # Cold encode each call. If you want this cached, pre-encode at registry
         # load time and stuff into ref.encoded_codes.
-        return self.encode_reference(ref.ref_audio_path), ref.ref_text
+        codes = self.encode_reference(ref.ref_audio_path)
+        # encode_reference is `list | None` in the Protocol because preset-voice
+        # backends return None; NeuTTS's implementation always returns the codes
+        # (or raises). Narrow for the type checker.
+        assert codes is not None, "NeuTTS.encode_reference returned None unexpectedly"
+        return codes, ref.ref_text
 
 
 # Auto-register at import time.
