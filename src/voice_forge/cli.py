@@ -192,6 +192,48 @@ def voice() -> None:
     """Voice management subcommands (add, delete, from-elevenlabs)."""
 
 
+def _parse_sampling_value(s: str) -> int | float | str | bool:
+    """Coerce a CLI string value to its narrowest numeric type, fallback string.
+
+    Examples:
+        "42"   → 42  (int)
+        "1.5"  → 1.5 (float)
+        "true" → True (bool)
+        "none" → None
+        "af_bella" → "af_bella" (str)
+    """
+    low = s.strip().lower()
+    if low in ("true", "yes"):
+        return True
+    if low in ("false", "no"):
+        return False
+    if low in ("none", "null"):
+        return None  # type: ignore[return-value]
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    return s
+
+
+def _parse_sampling_kv(items: tuple[str, ...]) -> dict:
+    """Parse repeatable ``--sampling key=value`` flags into a dict."""
+    out: dict = {}
+    for item in items:
+        if "=" not in item:
+            raise click.BadParameter(
+                f"--sampling expects key=value, got: {item!r}",
+                param_hint="--sampling",
+            )
+        key, _, val = item.partition("=")
+        out[key.strip()] = _parse_sampling_value(val)
+    return out
+
+
 @voice.command("add")
 @click.argument("voice_id")
 @click.argument(
@@ -212,6 +254,18 @@ def voice() -> None:
 @click.option("--backend", default="neutts", show_default=True)
 @click.option("--language", default="en", show_default=True)
 @click.option("--description", default="")
+@click.option(
+    "--sampling",
+    "sampling_overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help=(
+        "Per-voice sampling override; repeat for multiple keys. Examples: "
+        "--sampling speed=1.1 --sampling seed=42. Values are coerced "
+        "int/float/bool/None when possible; otherwise treated as strings. "
+        "See docs/BACKENDS.md for per-backend tunables."
+    ),
+)
 @click.option("--overwrite", is_flag=True, help="Replace existing voice with same id")
 def voice_add(
     voice_id: str,
@@ -221,6 +275,7 @@ def voice_add(
     backend: str,
     language: str,
     description: str,
+    sampling_overrides: tuple[str, ...],
     overwrite: bool,
 ) -> None:
     """Add a voice — from a ref WAV (cloning backends) OR a --preset name (preset backends)."""
@@ -243,6 +298,8 @@ def voice_add(
     metadata: dict = {"language": language, "description": description}
     if preset_id:
         metadata["preset_id"] = preset_id
+    if sampling_overrides:
+        metadata["sampling"] = _parse_sampling_kv(sampling_overrides)
 
     if ref_audio_path and ref_text is None:
         click.echo("Whisper-transcribing ref audio (forced language=en)...", err=True)
@@ -264,8 +321,68 @@ def voice_add(
     except FileExistsError as exc:
         click.echo(f"error: {exc}. Re-run with --overwrite to replace.", err=True)
         sys.exit(1)
-    suffix = f" preset={preset_id!r}" if preset_id else ""
+    suffix_bits = []
+    if preset_id:
+        suffix_bits.append(f"preset={preset_id!r}")
+    if sampling_overrides:
+        suffix_bits.append(f"sampling={metadata['sampling']!r}")
+    suffix = " " + " ".join(suffix_bits) if suffix_bits else ""
     click.echo(f"registered {ref.voice_id} (backend={ref.backend}){suffix}")
+
+
+@voice.command("tune")
+@click.argument("voice_id")
+@click.option(
+    "--sampling",
+    "sampling_overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help=(
+        "Sampling-param override; repeat for multiple keys. Existing keys are "
+        "preserved unless explicitly overwritten here."
+    ),
+)
+@click.option(
+    "--clear-sampling",
+    is_flag=True,
+    help="Remove the entire sampling block (resets to backend defaults).",
+)
+def voice_tune(
+    voice_id: str,
+    sampling_overrides: tuple[str, ...],
+    clear_sampling: bool,
+) -> None:
+    """Adjust the per-voice sampling params on an already-registered voice.
+
+    Examples:
+        voice-forge voice tune saga-comms-f5 --sampling cfg_strength=2.5 --sampling seed=42
+        voice-forge voice tune heid-research-dia --sampling max_new_tokens=8192
+        voice-forge voice tune saga-comms-f5 --clear-sampling
+    """
+    from .registry import Registry
+
+    if not sampling_overrides and not clear_sampling:
+        click.echo(
+            "error: pass at least one --sampling key=value (or --clear-sampling to reset).",
+            err=True,
+        )
+        sys.exit(2)
+    if sampling_overrides and clear_sampling:
+        click.echo(
+            "error: --sampling and --clear-sampling are mutually exclusive.",
+            err=True,
+        )
+        sys.exit(2)
+
+    overrides = _parse_sampling_kv(sampling_overrides) if sampling_overrides else None
+    registry = Registry()
+    try:
+        ref = registry.tune(voice_id, sampling_overrides=overrides, clear=clear_sampling)
+    except KeyError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(1)
+    new_sampling = ref.metadata.get("sampling") or "(cleared)"
+    click.echo(f"tuned {voice_id} sampling={new_sampling!r}")
 
 
 @voice.command("from-elevenlabs")

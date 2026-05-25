@@ -121,3 +121,35 @@ class Registry:
 
     def exists(self, voice_id: str) -> bool:
         return _voice_dir(self.root, voice_id).exists()
+
+    def tune(
+        self,
+        voice_id: str,
+        sampling_overrides: dict | None = None,
+        *,
+        clear: bool = False,
+    ) -> VoiceRef:
+        """Update the ``sampling`` block of a voice's metadata.json.
+
+        Args:
+            voice_id: existing voice to tune. Raises KeyError if missing.
+            sampling_overrides: keys to set or update inside ``metadata['sampling']``.
+                Existing keys are preserved unless explicitly overwritten here.
+            clear: if True, remove the ``sampling`` block entirely. Takes precedence
+                over ``sampling_overrides`` for the same call.
+
+        Returns the refreshed VoiceRef.
+        """
+        voice_dir = _voice_dir(self.root, voice_id)
+        if not voice_dir.exists():
+            raise KeyError(f"voice not in registry: {voice_id!r}")
+        meta_path = voice_dir / "metadata.json"
+        meta = json.loads(meta_path.read_text())
+        if clear:
+            meta.pop("sampling", None)
+        elif sampling_overrides:
+            existing = dict(meta.get("sampling") or {})
+            existing.update(sampling_overrides)
+            meta["sampling"] = existing
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+        return _load_voice(voice_dir)
