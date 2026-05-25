@@ -27,6 +27,76 @@
 
 ## 2026-05-25
 
+### Upstream packaging defects in TTS backend ecosystem — three real ones found by actually trying to install
+
+**Context.** v0.3 shipped a subprocess-isolated backend pattern + concrete backends for Piper / Chatterbox / MeloTTS. The `voice-forge backend install <name>` CLI was supposed to make these one-command installs. Real-world install attempts on macOS arm64 / Python 3.12 revealed three distinct upstream packaging defects.
+
+**Defects found.**
+
+1. **`chatterbox-tts<=0.1.3` → `pkuseg==0.0.25` build failure.** pkuseg is a transitive dep (Chinese segmentation); v0.0.25's setup.py imports numpy but doesn't declare it in build-system.requires. uv refuses to build it with `ModuleNotFoundError: No module named 'numpy'`. **Fix applied:** bump our pin to `chatterbox-tts>=0.1.7` — upstream cleaned this up in 0.1.4+.
+
+2. **`melotts==0.1.1` sdist is broken.** The PyPI tarball's `setup.py` reads a `src/requirements.txt` that doesn't exist in the published archive. **Workaround attempted:** install from upstream git. Required adding `[tool.hatch.metadata] allow-direct-references = true` to our pyproject.toml so hatch would accept a direct-URL dep in our extras.
+
+3. **MeloTTS's transitive transformers==4.27.4 → tokenizers==0.13.3 has no macOS arm64 wheel.** Once the sdist issue was bypassed, fugashi needed `mecab` as a system library (fixed via `brew install mecab`), but then `tokenizers==0.13.3` had no published wheel for the (macOS arm64, Python 3.12) tuple, forcing a Rust toolchain build that uv-with-pip-not-installed can't drive. **MeloTTS does not provision cleanly on arm64 macOS today.**
+
+**Outcome.**
+
+- **Piper**: ✓ provisioned in ~60 s. Clean install.
+- **Chatterbox**: ✓ provisioned in ~3-4 min (after the pin bump).
+- **MeloTTS**: ✗ blocked on upstream packaging quality. The backend module + pyproject extra ship; `voice-forge backend install melotts` is documented as "requires upstream fixes" in QUEUED.
+
+**Mechanism.** Each defect is a different layer of the Python packaging stack:
+
+- (1) is a *build-deps declaration bug* — the package declares what it imports but not what it needs to *build*. PEP 517 made this fixable per-package (build-system.requires) but old packages don't always declare it correctly.
+- (2) is a *publish error* — the sdist tarball was assembled without `src/requirements.txt` despite setup.py reading it.
+- (3) is a *wheel coverage gap* — newer Python + newer arch combinations exist where the published wheel matrix doesn't cover, so installs fall back to source builds that need toolchains the user hasn't installed.
+
+These are independent failure modes. The subprocess-pattern doesn't make them go away — it just isolates them from the main voice-forge venv. We discovered them by actually running `voice-forge backend install <name>` for each backend in turn.
+
+**Generalizable rule.** Shipping a wrapper around third-party Python packages means inheriting their packaging defects. "It installs cleanly in our dev env on Python 3.11 Linux" is not "it installs cleanly for users." Probe each backend on each supported (Python, OS, arch) combo BEFORE claiming it's installable, OR document the install failure modes honestly when you can't probe everywhere. Don't claim user-facing one-command install for backends you haven't run the command on.
+
+**Refs.** Commit `05c1727` (chatterbox pin bump + melotts git-URL workaround). QUEUED entry "MeloTTS install blocked on upstream packaging quality (arm64 macOS)".
+
+---
+
+### Subprocess-isolated backends with HTTP-shim IPC give crash isolation + venv hygiene at ~5s cold-start cost
+
+**Context.** Backends like Chatterbox (`torch==2.6.0` + `transformers==5.2.0` hard pins) and Fish Audio S2 Pro can't coexist with voice-forge's main F5/Kokoro/XTTS/Dia venv — installing them breaks every other backend. Piper is GPL-3, which we don't want to risk linking into our Apache-2 main process. The architectural question was: how do we ship these without polluting the main venv?
+
+**Evidence.** Pattern shipped in `src/voice_forge/backends/_subprocess.py` (commit `63b3267`) using HTTP-shim IPC. Each subprocess backend lives in its own venv at `~/.voice-forge/backends/<name>/.venv/`. Parent spawns a child via `voice-forge-backend-shim <name>`; talks to it over localhost HTTP (`POST /synth` returns chunked float32-LE PCM).
+
+10 unit tests validate the lifecycle with a real-but-fake child shim (actual `subprocess.Popen` + `http.server` + `urllib.request` round-trips — not mocks):
+- provisioning-missing errors (4 variants — no venv, no state.json, corrupted state, no shim binary)
+- happy-path load / health / synthesize / synthesize_stream
+- shutdown idempotency
+- two-concurrent-backends get different ports
+
+Real-world install verification: Piper + Chatterbox provisioned end-to-end on macOS arm64 today (see the "Upstream packaging defects" LEARNING above for the bumps that took).
+
+Cost characteristics:
+
+- **Cold start**: ~3-5s extra on FIRST call (Popen + the child's `uv pip` venv activate + shim model warmup). Subsequent calls reuse the running child.
+- **Per-call IPC overhead**: ~50-100ms. Negligible vs F5 batch synth at 5-15s.
+- **Memory**: parent process RSS stays the same regardless of how many subprocess backends are loaded. Each child's RSS is independent.
+- **Crash isolation**: child segfault or OOM doesn't kill the parent — only that one backend goes down, surfaced via `health()` returning `child_error`.
+
+**Mechanism.** The HTTP-shim model exploits the fact that voice-forge already has its own REST API. The shim is a tiny FastAPI app (about 100 lines, in `src/voice_forge/subprocess_shim.py`) that imports the backend module, instantiates + loads, and serves `/synth` + `/health` on a localhost-only port. The parent's `SubprocessBackend` class delegates `synthesize_stream()` to a POST against that port.
+
+The same backend module file works in both processes via a sentinel env var: when `VOICE_FORGE_SUBPROCESS_CHILD=1` is set (by the shim), the module registers an in-process implementation that imports the upstream lib directly. Otherwise it registers the SubprocessBackend wrapper. One file, two roles, no duplication.
+
+**Tradeoffs considered + rejected.**
+
+- **(b) stdin/stdout JSON-line IPC.** Simpler and avoids a port + HTTP dependency, BUT streaming PCM over stdin/stdout would require length-prefixed binary frames, which adds protocol complexity.
+- **(c) Unix-domain socket + framed binary.** Lowest-overhead option, but only marginal latency win for our use case (~10-20ms vs HTTP's ~50ms), at the cost of platform portability.
+
+HTTP shim wins on time-to-ship + portability, costs us ~50ms per call we'd never notice.
+
+**Generalizable rule.** When a dependency closure can't coexist with the main process, the cheapest correct isolation is a per-extra venv + a localhost HTTP shim that re-exposes the same domain API the parent already speaks. The shim isn't new code — it's a thin re-export. The hardest part is making the same module file work in both processes; an env-var sentinel keeps that ~10 lines of branching.
+
+**Refs.** Commit `63b3267` (subprocess pattern). Piper / Chatterbox modules at commit `9ad0700`. Same pattern would unblock Fish Audio S2 Pro (QUEUED P3) when we revisit that.
+
+---
+
 ### Streaming wins are only as good as the weakest link — hermes' Discord adapter is the real bottleneck
 
 **Context.** voice-forge shipped two streaming surfaces (HTTP layer-1 chunked, WS layer-2) that drop F5 first-audio from 60+ s to ~3 s on long-form text. Open question: does that win actually reach the listener at the *consuming* end of the chain (hermes-agent → Discord)? Spoiler: today, no — the adapter buffers everything back to disk before Discord ever sees a frame.
