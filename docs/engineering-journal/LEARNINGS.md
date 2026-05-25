@@ -27,6 +27,32 @@
 
 ## 2026-05-25
 
+### Fish Audio S2 Pro deferred — integration cost too high for predicted-similar quality
+
+**Context.** Seventh backend candidate considered. Fish Audio S2 Pro (fishaudio/fish-speech, 4B params, Dual-AR architecture, decoder-only transformer with SGLang streaming, 80+ languages, inline emotion tags). PRIOR_ART originally marked it Apache-2; verifying 2026-05-25 turned up the actual license: **Fish Audio Research License** — non-commercial only, commercial requires paid license.
+
+**Evidence collected (without running a smoke synth):**
+
+- **License correction:** codebase + model weights both under Fish Audio Research License. Research/non-commercial allowed free; commercial needs `business@fish.audio` paid license + "Built with Fish Audio" attribution. Same license shape as XTTS's CPML; would need an equivalent `FISH_AUDIO_RESEARCH_LICENSE_AGREED=1` env-var gate.
+
+- **Dep hygiene:** exact pins on `torch==2.8.0`, `pydantic==2.9.2`, `einx==0.2.2`, `datasets==2.18.0`, `modelscope==1.17.1`, plus an upper bound `transformers<=4.57.3`. Same "won't coexist with shared venv" pattern as Chatterbox — needs the subprocess-isolated backend pattern (QUEUED P1) to ship.
+
+- **Architecture:** decoder-only transformer (Dual-AR slow 4B + fast 400M). Architecturally in the same family as XTTS + Chatterbox. The empirical pattern across our four decoder-only audits is "no accent preservation on identity cloning" — Fish Audio is predicted to land in the same pitch/gender-adapter bucket as XTTS + Chatterbox, not the identity-preserving bucket where F5 sits alone.
+
+- **Integration cost:** no clean Python API. 3-step CLI pipeline (encode-ref → generate-tokens → decode-audio) OR run their `tools/api_server.py` as a subprocess. Plus ~10 GB model download. Plus `pyaudio` system dep (`brew install portaudio`). Plus the subprocess-isolation prerequisite.
+
+**Decision (deferred).** Stopped short of running the 9-WAV smoke. Queued under QUEUED.md P3 — depends on the subprocess pattern landing AND a use case emerging that justifies the cost. The two scenarios that would re-prioritize:
+1. Multilingual personas join the Asgard fleet (Fish Audio has 80+ languages vs F5's English-only).
+2. The inline emotion-tag system (`[whisper]`, `[excited]`, 15K+ free-form tags) becomes valuable enough to want fine-grained prosody control. F5 doesn't have an equivalent.
+
+**Mechanism — why we paused.** Six prior auditions established a clear pattern: F5 is the identity-preserving cloning leader; decoder-only TTS backends (NeuTTS, XTTS, Chatterbox) all converge on "good audio, no accent preservation." Spending 2-3 more hours on Fish Audio to likely confirm the same pattern is poor leverage given the open questions still on the v0.2 task board (per-voice tuning to close F5's Heid drift, streaming to hide F5's RTF, the Heid ref-WAV investigation).
+
+**Generalizable rule.** **A backend's architectural family is a strong predictor of its cloning-fidelity bucket once you have 3+ data points within the family.** Don't audit every member to confirm the pattern; predict + queue + only verify when the predicted answer would change a decision.
+
+**Refs.** [Cloning fidelity is a spectrum LEARNING](#cloning-fidelity-is-a-spectrum-not-a-binary--xtts-v2-produces-clean-audio-with-zero-accent-preservation), [Chatterbox audition LEARNING](#chatterbox-turbo-audition--exact-pin-packaging-hostile-to-shared-venvs-cloning-is-pitch-gender-only-heid-p1-works), [QUEUED P3 Fish Audio](QUEUED.md), PRIOR_ART.md license-correction note.
+
+---
+
 ### Chatterbox-Turbo audition — exact-pin packaging hostile to shared venvs; cloning is pitch+gender only; Heid p1 works
 
 **Context.** Sixth backend candidate evaluated on the Asgard sister refs. Chatterbox-Turbo from Resemble AI: 350M params, single-step diffusion built on a T3 token model, MIT-licensed wrapper. Promised sub-200ms first-byte latency + emotion control.

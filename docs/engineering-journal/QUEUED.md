@@ -92,6 +92,34 @@ Ideal end state: when you audition a sister and it sounds wrong, you tweak her m
 
 ---
 
+## P3 — Fish Audio S2 Pro backend (research license + multi-step inference)
+
+**Priority.** P3 — likely doesn't change the standings vs F5; high integration cost.
+
+**Effort.** ~3-4 hours including model download (~10 GB), checkpoint disambiguation (S2-Pro vs openaudio-s1-mini), api_server provisioning, smoke synth.
+
+**Worth it when.** Need 80+ language multilingual coverage AND/OR want to test their inline emotion-tag system (`[whisper]`, `[excited]`, `[angry]`, plus 15K+ free-form descriptors). Not worth it just to test "another cloning backend" — F5 is the answer there.
+
+**License.** **Fish Audio Research License** — research/non-commercial only. Commercial use requires paid license from business@fish.audio. Same shape as XTTS-v2's CPML; same `COQUI_TOS_AGREED`-style env-var gate would apply (`FISH_AUDIO_RESEARCH_LICENSE_AGREED=1` or similar). Plus an attribution requirement: "Built with Fish Audio" must appear on any product using it.
+
+**Install picture (verified 2026-05-25):**
+- No real PyPI package (`fish-speech==0.1.0` is a placeholder, no metadata). Real install path: `git clone github.com/fishaudio/fish-speech + uv pip install -e .`
+- Pinned deps that conflict with main voice-forge venv: `torch==2.8.0` (exact), `transformers<=4.57.3`, `pydantic==2.9.2` (exact), `einx==0.2.2` (exact), `datasets==2.18.0` (exact), `modelscope==1.17.1` (exact). **Cannot coexist** with our main venv — needs the subprocess-isolated backend pattern (QUEUED P1).
+- System dep: `pyaudio` requires `brew install portaudio` on macOS.
+- Verified install works in isolated venv at `$CLAUDE_JOB_DIR/fishaudio-venv` (Python 3.12 + torch 2.8 + transformers 4.57.3 + pydantic 2.9.2 + MPS available + `fish_speech` module imports cleanly).
+
+**Architecture (worth knowing before integration):**
+- **No simple Python API.** Inference is a 3-step CLI pipeline: encode-ref → generate-tokens → decode-audio, each a separate script under `fish_speech/models/dac/inference.py` etc.
+- Their `tools/api_server.py` is a FastAPI server — easiest integration is to run that as a subprocess and HTTP it (like Piper's intended pattern).
+- 4B-parameter Dual-AR (slow 4B + fast 400M). Their benchmark: RTF 0.195 on H200. Apple Silicon RTF unknown — likely 1-3x on MPS given model size.
+- 80+ languages, native multi-speaker via `<|speaker:i|>` tokens, 15K+ inline emotion tags.
+
+**Likely cloning-fidelity bucket (predicted, not verified).** Architecturally decoder-only transformer like XTTS + Chatterbox; the pattern across our four ear-tested decoder-only backends has been "no accent preservation." Would expect Fish Audio to land in the same pitch/gender-adapter bucket. NOT predicted to displace F5 for the identity-preserving cloning use case.
+
+**Refs.** `https://github.com/fishaudio/fish-speech` (LICENSE = Fish Audio Research License, codebase Apache-2-shaped but with the research-only constraint on weights too), `https://huggingface.co/fishaudio/s2-pro` (4B model), `https://speech.fish.audio/` (docs). PRIOR_ART.md updated 2026-05-25 with the license correction (was wrongly marked "Apache 2.0" in the original survey).
+
+---
+
 ## P2 — Kitten backend (smallest model, ONNX, CPU-only)
 
 **Priority.** P2 — lightweight option for resource-constrained hosts.
