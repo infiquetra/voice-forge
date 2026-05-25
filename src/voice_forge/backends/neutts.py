@@ -77,6 +77,12 @@ class NeuTTSBackend:
 
     name = "neutts"
 
+    # NeuTTS's repeat_penalty is applied at backend-load time via a Llama.__call__
+    # monkey-patch (the only way to inject it into NeuTTS's autoregressive
+    # sampling without forking the upstream). Per-voice override would require
+    # thread-local state through the patch — see BACKENDS.md § NeuTTS quirks.
+    KNOWN_TUNABLES: dict = {}
+
     def __init__(self) -> None:
         self._tts: Any = None
         self._config: dict[str, Any] = {}

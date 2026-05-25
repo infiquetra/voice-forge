@@ -42,6 +42,7 @@ def test_runtime_checkable_protocol_accepts_compliant_class():
 
     class FakeBackend:
         name = "fake"
+        KNOWN_TUNABLES: dict = {}
 
         def load(self, config): ...
         def encode_reference(self, ref):
@@ -62,6 +63,7 @@ def test_runtime_checkable_protocol_accepts_compliant_class():
 def test_register_and_lookup_backend():
     class DummyBackend:
         name = "dummy_test"
+        KNOWN_TUNABLES: dict = {}
 
         def load(self, config): ...
         def encode_reference(self, ref):

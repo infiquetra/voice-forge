@@ -12,9 +12,26 @@ from __future__ import annotations
 import importlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, TypedDict, runtime_checkable
 
 import numpy as np
+
+
+class TunableSpec(TypedDict, total=False):
+    """Schema for one per-voice sampling parameter.
+
+    A backend exposes its tunables via ``KNOWN_TUNABLES: dict[str, TunableSpec]``
+    so callers (CLI, REST clients, the demo page) can render a config UI without
+    hardcoded per-backend knowledge. Values picked from this schema flow into
+    ``VoiceRef.metadata['sampling'][<key>]`` and through to the backend's
+    ``synthesize()`` call.
+    """
+
+    type: Literal["int", "float", "bool", "string"]
+    min: float | int
+    max: float | int
+    default: float | int | bool | str
+    description: str
 
 
 @dataclass
@@ -28,6 +45,12 @@ class VoiceRef:
     - Kokoro:  preset_id
     - Kitten:  preset_id
     - Dia:     ref_audio_path (audio prompt)
+
+    ``persona`` is the human-meaningful identity that may be shared by
+    multiple voice rows under different backends (e.g. ``saga-comms``
+    and ``saga-comms-f5`` are the same persona "Saga" rendered through
+    NeuTTS and F5 respectively). Optional — the demo picker derives a
+    fallback by stripping known backend suffixes when None.
     """
 
     voice_id: str
@@ -37,6 +60,7 @@ class VoiceRef:
     preset_id: str | None = None
     encoded_codes: list | None = None
     metadata: dict = field(default_factory=dict)
+    persona: str | None = None
 
 
 @runtime_checkable
@@ -49,6 +73,12 @@ class TTSBackend(Protocol):
     """
 
     name: str
+    # KNOWN_TUNABLES advertises which sampling overrides the backend honors.
+    # Used by GET /v1/backends to drive the demo page's conditional knob panel.
+    # Each value should follow the TunableSpec shape; we type the outer dict
+    # loosely here to keep plain-dict-literal class attributes compatible.
+    # Empty {} is valid (NeuTTS has no per-voice tunables today).
+    KNOWN_TUNABLES: dict
 
     def load(self, config: dict) -> None:
         """Load model weights + warm up. Called once per backend instance."""

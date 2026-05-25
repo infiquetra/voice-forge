@@ -26,6 +26,7 @@ class FakeWSBackend:
     """
 
     name = "fake-ws"
+    KNOWN_TUNABLES: dict = {}
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -259,6 +260,44 @@ def test_ws_text_only_whitespace_is_dropped(ws_setup):
     # Only the one real sentence was synthesized.
     assert [c[1] for c in fake.calls] == ["One sentence."]
     assert [e for e in events if e["event"] == "complete"][0]["sentences_total"] == 1
+
+
+def test_list_backends_returns_known_set_with_tunable_schemas(ws_setup):
+    """GET /v1/backends lists each known backend + its KNOWN_TUNABLES schema."""
+    client, _ = ws_setup
+    resp = client.get("/v1/backends")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "data" in body
+    by_name = {b["name"]: b for b in body["data"]}
+    # All five v0.2 backends should appear regardless of which extras are installed
+    # (some may have installed=False in CI where extras are missing).
+    for expected in ("f5", "kokoro", "neutts", "xtts", "dia"):
+        assert expected in by_name, f"missing backend {expected!r} in /v1/backends"
+        entry = by_name[expected]
+        assert "tunables" in entry
+        assert "installed" in entry
+        assert "known" in entry
+    # F5's tunable schema should at minimum carry nfe_step + its bounds.
+    f5_tunables = by_name["f5"]["tunables"]
+    if by_name["f5"]["installed"]:
+        assert "nfe_step" in f5_tunables
+        spec = f5_tunables["nfe_step"]
+        assert spec["type"] == "int"
+        assert spec["min"] <= 16 <= spec["max"]
+        assert spec["default"] == 32
+
+
+def test_list_voices_surfaces_persona(ws_setup):
+    """GET /v1/audio/voices returns each voice's derived (or explicit) persona."""
+    client, _ = ws_setup
+    resp = client.get("/v1/audio/voices")
+    assert resp.status_code == 200
+    body = resp.json()
+    fake = next(v for v in body["data"] if v["id"] == "fake-voice")
+    # The fake voice has no explicit persona in metadata, so the derivation
+    # falls back to voice_id verbatim (no known backend suffix to strip).
+    assert fake["persona"] == "fake-voice"
 
 
 def test_demo_page_is_served(ws_setup):

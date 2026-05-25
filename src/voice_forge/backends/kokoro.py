@@ -52,6 +52,16 @@ class KokoroBackend:
 
     name = "kokoro"
 
+    KNOWN_TUNABLES = {
+        "speed": {
+            "type": "float",
+            "min": 0.5,
+            "max": 2.0,
+            "default": 1.0,
+            "description": "Playback rate; KPipeline honors this directly.",
+        },
+    }
+
     def __init__(self) -> None:
         self._pipeline: Any = None
         self._config: dict[str, Any] = {}

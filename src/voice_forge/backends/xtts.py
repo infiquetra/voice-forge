@@ -74,6 +74,58 @@ class XTTSBackend:
 
     name = "xtts"
 
+    KNOWN_TUNABLES = {
+        "speed": {
+            "type": "float",
+            "min": 0.5,
+            "max": 2.0,
+            "default": 1.0,
+            "description": "Playback rate.",
+        },
+        "temperature": {
+            "type": "float",
+            "min": 0.1,
+            "max": 1.5,
+            "default": 0.75,
+            "description": "Sampling temperature — higher = more variation.",
+        },
+        "top_k": {
+            "type": "int",
+            "min": 1,
+            "max": 100,
+            "default": 50,
+            "description": "Top-K sampling cutoff.",
+        },
+        "top_p": {
+            "type": "float",
+            "min": 0.1,
+            "max": 1.0,
+            "default": 0.85,
+            "description": "Nucleus sampling cumulative probability.",
+        },
+        "repetition_penalty": {
+            "type": "float",
+            "min": 1.0,
+            "max": 5.0,
+            "default": 2.0,
+            "description": "Repetition penalty in the sampler.",
+        },
+        "length_penalty": {
+            "type": "float",
+            "min": 0.5,
+            "max": 2.0,
+            "default": 1.0,
+            "description": "Length penalty during decoding.",
+        },
+        "stream_chunk_chars": {
+            "type": "int",
+            "min": 100,
+            "max": 2000,
+            "default": 600,
+            "description": "Max chars per streaming chunk.",
+        },
+    }
+
     def __init__(self) -> None:
         self._tts: Any = None
         self._config: dict[str, Any] = {}

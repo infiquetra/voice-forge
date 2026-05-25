@@ -117,6 +117,7 @@ class SpeechRequest(BaseModel):
 class VoiceInfo(BaseModel):
     id: str
     backend: str
+    persona: str | None = None
     language: str | None = None
     description: str | None = None
     metadata: dict
@@ -285,6 +286,56 @@ async def synthesize_speech(req: SpeechRequest):
     )
 
 
+class BackendInfo(BaseModel):
+    """Per-backend introspection payload for the demo page's conditional knob panel."""
+
+    name: str
+    known: bool
+    installed: bool
+    tunables: dict
+
+
+class BackendsList(BaseModel):
+    data: list[BackendInfo]
+
+
+@app.get("/v1/backends", response_model=BackendsList)
+async def list_backends() -> BackendsList:
+    """List backends voice-forge knows about + each one's per-voice tunable schema.
+
+    Used by the demo page to render a conditional knob panel: pick a model,
+    see only the sampling knobs that backend honors. Backends listed but
+    flagged ``installed=false`` are known to the registry but their extras
+    aren't installed in this environment (e.g. you'd need ``[chatterbox]``).
+
+    Attempts to import each known backend module to surface its
+    ``KNOWN_TUNABLES`` even before any voice has triggered a load —
+    failure to import (missing extras) is recorded as ``installed=false``.
+    """
+    out: list[BackendInfo] = []
+    for backend_name in known_backends():
+        tunables: dict = {}
+        is_installed = False
+        try:
+            load_backend_module(backend_name)
+            cls = get_backend(backend_name)
+            tunables = getattr(cls, "KNOWN_TUNABLES", {}) or {}
+            is_installed = True
+        except (ImportError, KeyError):
+            # Backend known by name but extra not installed in this env
+            # (e.g. chatterbox without the [chatterbox] pip extra).
+            is_installed = False
+        out.append(
+            BackendInfo(
+                name=backend_name,
+                known=True,
+                installed=is_installed,
+                tunables=tunables,
+            )
+        )
+    return BackendsList(data=out)
+
+
 @app.get("/v1/audio/voices", response_model=VoicesList)
 async def list_voices() -> VoicesList:
     """List all registered voices (OpenAI-compatible-ish shape)."""
@@ -294,6 +345,7 @@ async def list_voices() -> VoicesList:
             VoiceInfo(
                 id=v.voice_id,
                 backend=v.backend,
+                persona=v.persona,
                 language=v.metadata.get("language"),
                 description=v.metadata.get("description"),
                 metadata=v.metadata,
@@ -314,6 +366,7 @@ async def get_voice(voice_id: str) -> VoiceInfo:
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,
+        persona=v.persona,
         language=v.metadata.get("language"),
         description=v.metadata.get("description"),
         metadata=v.metadata,
@@ -410,6 +463,7 @@ async def pull_from_elevenlabs(req: FromElevenLabsRequest) -> VoiceInfo:
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,
+        persona=v.persona,
         language=v.metadata.get("language"),
         description=v.metadata.get("description"),
         metadata=v.metadata,

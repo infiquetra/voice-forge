@@ -46,6 +46,54 @@ class F5Backend:
 
     name = "f5"
 
+    # Per-voice sampling overrides honored by F5's diffusion sampler. The 16/32
+    # step split (default 32 = quality, 16 = streaming preset) is documented in
+    # DECISIONS 2026-05-25.
+    KNOWN_TUNABLES = {
+        "nfe_step": {
+            "type": "int",
+            "min": 8,
+            "max": 64,
+            "default": 32,
+            "description": "Diffusion denoising steps. 32 = quality preset; 16 = streaming preset.",
+        },
+        "cfg_strength": {
+            "type": "float",
+            "min": 1.0,
+            "max": 5.0,
+            "default": 2.0,
+            "description": "Classifier-free guidance strength — higher = tighter adherence to ref.",
+        },
+        "speed": {
+            "type": "float",
+            "min": 0.5,
+            "max": 2.0,
+            "default": 1.0,
+            "description": "Playback rate multiplier; 1.0 = natural pace.",
+        },
+        "seed": {
+            "type": "int",
+            "min": 0,
+            "max": 2147483647,
+            "default": 0,
+            "description": "RNG seed for reproducibility. 0 means random per call.",
+        },
+        "cross_fade_duration": {
+            "type": "float",
+            "min": 0.0,
+            "max": 1.0,
+            "default": 0.15,
+            "description": "Seconds of crossfade between internal chunks.",
+        },
+        "stream_chunk_chars": {
+            "type": "int",
+            "min": 100,
+            "max": 2000,
+            "default": 1000,
+            "description": "Max chars per streaming chunk (sentence chunker hint).",
+        },
+    }
+
     def __init__(self) -> None:
         self._tts: Any = None
         self._config: dict[str, Any] = {}

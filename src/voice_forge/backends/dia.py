@@ -104,6 +104,53 @@ def _resample_to_24khz(audio: np.ndarray, src_rate: int) -> np.ndarray:
 
 
 class DiaBackend:
+    """Dia-1.6B multi-speaker dialogue backend."""
+
+    KNOWN_TUNABLES = {
+        "max_new_tokens": {
+            "type": "int",
+            "min": 256,
+            "max": 16384,
+            "default": 3072,
+            "description": "Generation cap — bump above 3072 for long-form to avoid truncation.",
+        },
+        "guidance_scale": {
+            "type": "float",
+            "min": 1.0,
+            "max": 10.0,
+            "default": 3.0,
+            "description": "Classifier-free guidance strength.",
+        },
+        "temperature": {
+            "type": "float",
+            "min": 0.1,
+            "max": 3.0,
+            "default": 1.8,
+            "description": "Sampling temperature.",
+        },
+        "top_p": {
+            "type": "float",
+            "min": 0.1,
+            "max": 1.0,
+            "default": 0.90,
+            "description": "Nucleus sampling cumulative probability.",
+        },
+        "top_k": {
+            "type": "int",
+            "min": 1,
+            "max": 100,
+            "default": 45,
+            "description": "Top-K sampling cutoff.",
+        },
+        "stream_chunk_chars": {
+            "type": "int",
+            "min": 100,
+            "max": 2000,
+            "default": 600,
+            "description": "Max chars per streaming chunk.",
+        },
+    }
+
     """Dia-1.6B cloning + multi-speaker backend (Apache-2, via HF Transformers)."""
 
     name = "dia"

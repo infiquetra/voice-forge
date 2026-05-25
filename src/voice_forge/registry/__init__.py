@@ -31,6 +31,36 @@ def _voice_dir(root: Path, voice_id: str) -> Path:
     return root / voice_id
 
 
+def _derive_persona(voice_id: str, backend: str, known_backends: tuple[str, ...]) -> str:
+    """Fallback persona derivation when metadata doesn't carry one.
+
+    Strips a trailing ``-<backend>`` suffix where backend is in the
+    closed set we know about. Anything else returns voice_id verbatim.
+    Example: ``saga-comms-f5`` → ``saga-comms`` (one persona, two backend
+    rows). ``kokoro-bella`` stays as ``kokoro-bella`` since no known
+    backend suffix matches.
+    """
+    for known in known_backends:
+        suffix = f"-{known}"
+        if voice_id.endswith(suffix):
+            return voice_id[: -len(suffix)]
+    return voice_id
+
+
+_KNOWN_BACKEND_NAMES = (
+    "f5",
+    "neutts",
+    "kokoro",
+    "xtts",
+    "dia",
+    "piper",
+    "chatterbox",
+    "melotts",
+    "kitten",
+    "fast",  # nfe_step=16 variants are tagged "-fast" but share the parent persona
+)
+
+
 def _load_voice(voice_dir: Path) -> VoiceRef:
     """Read metadata.json + assemble a VoiceRef for one voice directory."""
     meta_path = voice_dir / "metadata.json"
@@ -44,6 +74,8 @@ def _load_voice(voice_dir: Path) -> VoiceRef:
     ref_wav = voice_dir / "ref.wav"
     ref_txt = voice_dir / "ref.txt"
     ref_text = ref_txt.read_text().strip() if ref_txt.exists() else None
+    explicit_persona = meta.get("persona")
+    persona = explicit_persona or _derive_persona(voice_id, backend, _KNOWN_BACKEND_NAMES)
     return VoiceRef(
         voice_id=voice_id,
         backend=backend,
@@ -51,6 +83,7 @@ def _load_voice(voice_dir: Path) -> VoiceRef:
         ref_text=ref_text,
         preset_id=meta.get("preset_id"),
         metadata=meta,
+        persona=persona,
     )
 
 
