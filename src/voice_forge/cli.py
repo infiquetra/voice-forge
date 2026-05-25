@@ -517,5 +517,133 @@ def health() -> None:
     click.echo(json.dumps(info, indent=2))
 
 
+# ----- backend (subprocess-isolated provisioning) -----
+
+
+@main.group("backend")
+def backend_group() -> None:
+    """Provision subprocess-isolated backends (Piper / Chatterbox / MeloTTS)."""
+
+
+@backend_group.command("install")
+@click.argument("name")
+@click.option(
+    "--backends-root",
+    type=click.Path(),
+    default=None,
+    help="Where to put the per-backend venv (default: ~/.voice-forge/backends).",
+)
+def backend_install(name: str, backends_root: str | None) -> None:
+    """Create the per-backend venv + install the right pip extras.
+
+    Run once per host before using a subprocess-isolated backend:
+
+      voice-forge backend install piper
+      voice-forge backend install chatterbox
+      voice-forge backend install melotts
+
+    Installs ``voice-forge-tts[<name>,subprocess-shim]`` into a dedicated
+    venv at ``~/.voice-forge/backends/<name>/.venv/`` and writes a
+    state.json with the shim entry-point. The main voice-forge process
+    only spawns + talks HTTP to the child; never imports the backend's
+    deps.
+    """
+    import shutil as _shutil
+    import subprocess as _subprocess  # noqa: PLC0415 — CLI-only
+
+    from .backends._subprocess import DEFAULT_BACKEND_ROOT
+
+    root = Path(backends_root).expanduser() if backends_root else DEFAULT_BACKEND_ROOT
+    backend_dir = root / name
+    venv_dir = backend_dir / ".venv"
+    state_path = backend_dir / "state.json"
+
+    uv = _shutil.which("uv")
+    if uv is None:
+        raise click.ClickException("uv not found on PATH. Install uv: https://docs.astral.sh/uv/")
+
+    click.echo(f"[{name}] creating venv at {venv_dir} ...")
+    backend_dir.mkdir(parents=True, exist_ok=True)
+    _subprocess.run([uv, "venv", str(venv_dir)], check=True)  # noqa: S603 — uv path validated above
+
+    extras_spec = f"voice-forge-tts[{name},subprocess-shim]"
+    click.echo(f"[{name}] installing {extras_spec} into venv ...")
+    _subprocess.run(  # noqa: S603 — uv path validated above
+        [
+            uv,
+            "pip",
+            "install",
+            "--python",
+            str(venv_dir / "bin" / "python"),
+            "-e",
+            f".[{name},subprocess-shim]",
+        ],
+        check=True,
+    )
+
+    state = {
+        "name": name,
+        "shim_entry": "voice-forge-backend-shim",
+        "venv_path": str(venv_dir),
+        "voice_forge_version": __version__,
+    }
+    state_path.write_text(json.dumps(state, indent=2))
+    click.echo(f"[{name}] provisioned. state at {state_path}")
+
+
+@backend_group.command("uninstall")
+@click.argument("name")
+@click.option(
+    "--backends-root",
+    type=click.Path(),
+    default=None,
+    help="Per-backend venv root (default: ~/.voice-forge/backends).",
+)
+def backend_uninstall(name: str, backends_root: str | None) -> None:
+    """Remove a subprocess backend's venv + state."""
+    import shutil as _shutil  # noqa: PLC0415
+
+    from .backends._subprocess import DEFAULT_BACKEND_ROOT
+
+    root = Path(backends_root).expanduser() if backends_root else DEFAULT_BACKEND_ROOT
+    backend_dir = root / name
+    if not backend_dir.exists():
+        click.echo(f"backend {name!r} not installed at {backend_dir} — nothing to remove")
+        return
+    _shutil.rmtree(backend_dir)
+    click.echo(f"removed {backend_dir}")
+
+
+@backend_group.command("list")
+@click.option(
+    "--backends-root",
+    type=click.Path(),
+    default=None,
+    help="Per-backend venv root (default: ~/.voice-forge/backends).",
+)
+def backend_list(backends_root: str | None) -> None:
+    """List provisioned subprocess backends."""
+    from .backends._subprocess import DEFAULT_BACKEND_ROOT
+
+    root = Path(backends_root).expanduser() if backends_root else DEFAULT_BACKEND_ROOT
+    if not root.is_dir():
+        click.echo(f"(no backends provisioned at {root})")
+        return
+    rows = []
+    for entry in sorted(root.iterdir()):
+        state_path = entry / "state.json"
+        if state_path.is_file():
+            try:
+                state = json.loads(state_path.read_text())
+                rows.append((entry.name, state))
+            except json.JSONDecodeError:
+                rows.append((entry.name, {"error": "corrupted state.json"}))
+    if not rows:
+        click.echo(f"(no provisioned backends in {root})")
+        return
+    for name, state in rows:
+        click.echo(f"  {name:15s} version={state.get('voice_forge_version', '?')}")
+
+
 if __name__ == "__main__":
     main()

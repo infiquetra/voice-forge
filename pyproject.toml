@@ -80,6 +80,30 @@ voice-lab = [
     # ElevenLabs Voice Lab puller + Whisper ref-trimmer
     "faster-whisper>=1.0",
 ]
+piper = [
+    # Piper TTS — GPL-3, runs subprocess-isolated. The parent voice-forge
+    # process never imports this; only `voice-forge backend install piper`
+    # pulls it into the per-backend venv at ~/.voice-forge/backends/piper/.venv/
+    "piper-tts>=1.2",
+]
+chatterbox = [
+    # Chatterbox-Turbo — MIT, sub-200ms latency cloning. Hostile dep pins
+    # require subprocess isolation; same install pattern as piper.
+    "chatterbox-tts>=0.1",
+]
+melotts = [
+    # MeloTTS — MIT multilingual preset voices. Subprocess-isolated to keep
+    # its transformer + torch pins away from the main voice-forge venv.
+    "melotts>=0.1",
+]
+subprocess-shim = [
+    # Lightweight HTTP shim used inside per-backend venvs. The parent already
+    # has fastapi + uvicorn from base deps; this extra exists so backend venvs
+    # can `pip install "voice-forge-tts[<backend>,subprocess-shim]"` without
+    # dragging in NeuTTS / F5 / etc.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
 all = [
     "voice-forge-tts[neutts,kokoro,f5,xtts,dia,voice-lab]",
 ]
@@ -95,6 +119,7 @@ dev = [
 
 [project.scripts]
 voice-forge = "voice_forge.cli:main"
+voice-forge-backend-shim = "voice_forge.subprocess_shim:main"
 
 [tool.hatch.build.targets.wheel]
 # Dist name is voice-forge-tts but the import package is voice_forge.

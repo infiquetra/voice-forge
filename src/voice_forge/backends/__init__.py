@@ -122,6 +122,13 @@ _BACKEND_MODULES: dict[str, str] = {
     "f5": "voice_forge.backends.f5",
     "xtts": "voice_forge.backends.xtts",
     "dia": "voice_forge.backends.dia",
+    # Subprocess-isolated backends (provisioned via `voice-forge backend install`).
+    # The parent-side modules are always importable (they just wrap
+    # SubprocessBackend); attempting to load() raises SubprocessBackendNotInstalled
+    # with a clear message until the per-backend venv exists.
+    "piper": "voice_forge.backends.piper",
+    "chatterbox": "voice_forge.backends.chatterbox",
+    "melotts": "voice_forge.backends.melotts",
 }
 
 
