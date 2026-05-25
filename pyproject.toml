@@ -32,6 +32,7 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.1",
     "python-multipart>=0.0.9",  # FastAPI File/Form deps
+    "prometheus-client>=0.20",  # /metrics endpoint
 ]
 
 [project.optional-dependencies]

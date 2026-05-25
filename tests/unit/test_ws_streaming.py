@@ -334,6 +334,54 @@ def test_list_voices_surfaces_persona(ws_setup):
     assert fake["persona"] == "fake-voice"
 
 
+def test_metrics_endpoint_renders_prometheus_format(ws_setup):
+    """GET /metrics returns text/plain Prometheus exposition with the core metrics."""
+    client, _ = ws_setup
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    # Prometheus client uses one of "text/plain; version=0.0.4; charset=utf-8"
+    # or the OpenMetrics variant. Either way we should see text/plain.
+    assert "text/plain" in resp.headers["content-type"]
+    body = resp.text
+    # Each metric we defined should appear in the registry's HELP/TYPE block,
+    # even before any synth has happened.
+    for name in (
+        "voice_forge_synth_seconds",
+        "voice_forge_synth_requests_total",
+        "voice_forge_backend_loaded",
+        "voice_forge_voices_registered",
+        "voice_forge_active_ws_connections",
+        "voice_forge_ws_sentences_total",
+    ):
+        assert name in body, f"missing metric {name!r} in /metrics body"
+    # voices_registered gauge is set per scrape — should show our fake voice.
+    assert "voice_forge_voices_registered 1" in body or "voice_forge_voices_registered 1.0" in body
+
+
+def test_metrics_ws_active_connections_tracks_open_sockets(ws_setup):
+    """The active-WS-connections gauge increments on connect + decrements on close."""
+    client, _ = ws_setup
+
+    def gauge_value(body):
+        for line in body.splitlines():
+            if line.startswith("voice_forge_active_ws_connections "):
+                return float(line.split()[1])
+        return None
+
+    initial = gauge_value(client.get("/metrics").text)
+    with client.websocket_connect("/v1/tts/stream") as ws:
+        ws.send_json({"voice": "fake-voice"})
+        ws.receive_json()  # session
+        during = gauge_value(client.get("/metrics").text)
+        ws.send_json({"end": True})
+        _collect_until_complete(ws)
+    after = gauge_value(client.get("/metrics").text)
+    assert (
+        during == (initial or 0) + 1
+    ), f"expected gauge to go up; initial={initial} during={during}"
+    assert after == initial, f"expected gauge back to initial; initial={initial} after={after}"
+
+
 def test_demo_page_is_served(ws_setup):
     """GET /demo returns the live-demo HTML page from the packaged static dir."""
     client, _ = ws_setup

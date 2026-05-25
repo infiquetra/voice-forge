@@ -91,6 +91,23 @@ OpenAI-compatible listing endpoint.
 
 ### `GET /voices/{voice_id}` — Get metadata
 
+### `GET /metrics` — Prometheus scrape endpoint
+
+Prometheus exposition format (`Content-Type: text/plain; version=0.0.4; charset=utf-8`). Auth-exempt — monitoring infrastructure scrapes without needing a token.
+
+Core metrics emitted:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `voice_forge_synth_seconds` | Histogram | `backend`, `voice_id`, `mode` (batch / stream) | Wall-clock seconds per synth call |
+| `voice_forge_synth_requests_total` | Counter | `backend`, `voice_id`, `mode`, `status` (ok / fail) | Synth call count |
+| `voice_forge_backend_loaded` | Gauge | `backend` | 1 if loaded in this process, 0 otherwise |
+| `voice_forge_voices_registered` | Gauge | (none) | Total voices in the registry directory |
+| `voice_forge_active_ws_connections` | Gauge | (none) | WebSocket clients currently connected |
+| `voice_forge_ws_sentences_total` | Counter | `backend`, `voice_id` | Sentences synthesized through the WS layer-2 stream |
+
+Cardinality note: `voice_id` is a label. For small deploys (≤100 voices) fine; for multi-tenant deploys with thousands of voice_ids this would explode Prometheus's TSDB. Cap is queued — see [QUEUED.md](engineering-journal/QUEUED.md).
+
 ### `GET /health` — Service health
 
 ```json

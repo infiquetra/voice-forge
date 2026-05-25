@@ -35,7 +35,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import __version__
+from . import __version__, metrics
 from .backends import available_backends, get_backend, known_backends, load_backend_module
 from .registry import Registry
 from .sentence_buffer import SentenceBuffer
@@ -84,6 +84,7 @@ def _ensure_backend(name: str, config: dict | None = None):
     backend.load(config or {})
     logger.info("backend %s loaded", name)
     _BACKENDS[name] = backend
+    metrics.backend_loaded.labels(backend=name).set(1)
     return backend
 
 
@@ -229,6 +230,22 @@ _CONTENT_TYPES = {
 # ----- Endpoints -----
 
 
+@app.get("/metrics")
+async def get_metrics() -> Response:
+    """Prometheus scrape endpoint.
+
+    Returns the canonical text/plain exposition format. Auth-exempt so
+    monitoring infrastructure (Prometheus + Grafana) can scrape without
+    needing a token rotation story.
+
+    Voices-registered gauge is updated on every scrape — keeps the value
+    fresh without paying the cost on every CRUD call.
+    """
+    metrics.voices_registered.set(len(_registry().list()))
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)
+
+
 @app.get("/health")
 async def health() -> dict:
     """Service health endpoint."""
@@ -254,26 +271,62 @@ async def synthesize_speech(req: SpeechRequest):
 
     backend = _ensure_backend(ref.backend, ref.metadata)
     content_type = _CONTENT_TYPES.get(req.response_format, "application/octet-stream")
+    mode = "stream" if req.stream else "batch"
+    metric_labels = {"backend": ref.backend, "voice_id": req.voice, "mode": mode}
 
     if req.stream:
         # Streaming: only WAV is supported in v0 (chunked PCM). MP3/Opus need full
         # buffer to encode; falls back to non-stream for those.
         if req.response_format not in ("wav", "pcm"):
             # Streaming non-wav: synth all then return as one response (degrades to non-streaming)
-            audio = backend.synthesize(req.input, ref)
+            import time as _time
+
+            t0 = _time.monotonic()
+            try:
+                audio = backend.synthesize(req.input, ref)
+            except Exception:
+                metrics.synth_requests_total.labels(**metric_labels, status="fail").inc()
+                raise
+            metrics.synth_seconds.labels(**metric_labels).observe(_time.monotonic() - t0)
+            metrics.synth_requests_total.labels(**metric_labels, status="ok").inc()
             wav_bytes = _samples_to_wav_bytes(audio)
             body = _wav_to_format(wav_bytes, req.response_format)
             return Response(content=body, media_type=content_type)
 
-        audio_iter = backend.synthesize_stream(req.input, ref)
+        # Native streaming path — instrument total wall-clock around the
+        # generator. Histograms record once per request when the response
+        # stream is fully consumed (or when an exception aborts it).
+        import time as _time
+
+        def _stream_wav_instrumented():
+            t0 = _time.monotonic()
+            status = "ok"
+            try:
+                yield from _stream_wav(backend.synthesize_stream(req.input, ref))
+            except Exception:
+                status = "fail"
+                raise
+            finally:
+                metrics.synth_seconds.labels(**metric_labels).observe(_time.monotonic() - t0)
+                metrics.synth_requests_total.labels(**metric_labels, status=status).inc()
+
         return StreamingResponse(
-            _stream_wav(audio_iter),
+            _stream_wav_instrumented(),
             media_type=content_type,
             headers={"X-Voice-Forge-Backend": ref.backend},
         )
 
     # Batch (full synth before reply)
-    audio = backend.synthesize(req.input, ref)
+    import time as _time
+
+    t0 = _time.monotonic()
+    try:
+        audio = backend.synthesize(req.input, ref)
+    except Exception:
+        metrics.synth_requests_total.labels(**metric_labels, status="fail").inc()
+        raise
+    metrics.synth_seconds.labels(**metric_labels).observe(_time.monotonic() - t0)
+    metrics.synth_requests_total.labels(**metric_labels, status="ok").inc()
     wav_bytes = _samples_to_wav_bytes(audio)
     body = _wav_to_format(wav_bytes, req.response_format)
     audio_sec = len(audio) / SAMPLE_RATE
@@ -528,10 +581,22 @@ async def demo_page() -> FileResponse:
 async def ws_tts_stream(ws: WebSocket) -> None:
     """Bidirectional streaming: text-in, audio-out, one sentence at a time."""
     await ws.accept()
+    metrics.active_ws_connections.inc()
     try:
-        init = await ws.receive_json()
-    except WebSocketDisconnect:
-        return
+        try:
+            init = await ws.receive_json()
+        except WebSocketDisconnect:
+            return
+        await _handle_ws_session(ws, init)
+    finally:
+        metrics.active_ws_connections.dec()
+
+
+async def _handle_ws_session(ws: WebSocket, init: object) -> None:
+    """Body of ws_tts_stream extracted so the active-connections gauge can wrap it.
+
+    Keeps the gauge balanced even on early returns / exceptions.
+    """
     voice_id = init.get("voice") if isinstance(init, dict) else None
     if not voice_id:
         await ws.send_json({"event": "error", "detail": "first message must include 'voice'"})
@@ -588,7 +653,15 @@ async def ws_tts_stream(ws: WebSocket) -> None:
         # Offload sync synth to threadpool so the asyncio loop stays
         # responsive — receiving more text from the client meanwhile.
         audio = await run_in_threadpool(backend.synthesize, sentence, voice_ref)
-        synth_ms = int((time.monotonic() - t0) * 1000)
+        synth_sec = time.monotonic() - t0
+        synth_ms = int(synth_sec * 1000)
+        # Record per-sentence latency on the same histogram the REST path uses,
+        # under mode="stream". Per-sentence is finer-grained than per-utterance
+        # which matches what WS callers actually optimize for.
+        metrics.synth_seconds.labels(
+            backend=voice_ref.backend, voice_id=voice_id, mode="stream"
+        ).observe(synth_sec)
+        metrics.ws_sentences_total.labels(backend=voice_ref.backend, voice_id=voice_id).inc()
         await ws.send_bytes(np.asarray(audio, dtype=np.float32).tobytes())
         await ws.send_json(
             {

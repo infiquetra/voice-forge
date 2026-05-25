@@ -18,6 +18,18 @@
 
 ---
 
+## P3 — Cap voice_id cardinality on /metrics
+
+**Priority.** P3 — only matters when voice-forge runs a multi-tenant deploy with hundreds+ of voice_ids and a Prometheus scraper.
+
+**Effort.** ~2 hours. Two reasonable approaches: (a) hash voice_id to a fixed-size set of label buckets ("voice_0".."voice_31"); (b) keep top-N most-recently-used voice_ids labeled, lump the rest into an "other" bucket. (b) is friendlier for debugging.
+
+**Worth it when.** A Prometheus TSDB starts complaining about high-cardinality series, OR a deploy registers >100 voices.
+
+**Context.** v0.3 metrics surface (commit pending) labels `voice_forge_synth_seconds`, `voice_forge_synth_requests_total`, and `voice_forge_ws_sentences_total` by `voice_id`. Each unique voice_id creates a new time series; at hundreds-of-voices scale this blows up storage + scrape cost. v0.2.0 Asgard fleet is ~10 voices so we're fine today. Doc cross-ref in `src/voice_forge/metrics.py` module docstring.
+
+---
+
 ## P1 — Subprocess-isolated backend pattern (architectural)
 
 **Priority.** P1 — unblocks at least two backend candidates we can't ship without it (Chatterbox, Piper).
