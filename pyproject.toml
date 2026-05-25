@@ -89,12 +89,18 @@ piper = [
 chatterbox = [
     # Chatterbox-Turbo — MIT, sub-200ms latency cloning. Hostile dep pins
     # require subprocess isolation; same install pattern as piper.
-    "chatterbox-tts>=0.1",
+    # 0.1.7+ pin: earlier versions (≤0.1.3) pulled in pkuseg 0.0.25 whose
+    # build_meta is broken (missing numpy in build-system.requires).
+    # See LEARNINGS 2026-05-25 § "Upstream packaging defects discovered ...".
+    "chatterbox-tts>=0.1.7",
 ]
 melotts = [
     # MeloTTS — MIT multilingual preset voices. Subprocess-isolated to keep
     # its transformer + torch pins away from the main voice-forge venv.
-    "melotts>=0.1",
+    # NOTE: as of 2026-05-25 the PyPI sdist for melotts==0.1.1 is broken
+    # (setup.py references src/requirements.txt which is not in the tarball).
+    # Install from the upstream git repo until a fixed release lands:
+    "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",
 ]
 subprocess-shim = [
     # Lightweight HTTP shim used inside per-backend venvs. The parent already
@@ -120,6 +126,12 @@ dev = [
 [project.scripts]
 voice-forge = "voice_forge.cli:main"
 voice-forge-backend-shim = "voice_forge.subprocess_shim:main"
+
+[tool.hatch.metadata]
+# Needed because the [melotts] extra references a git+https URL (PyPI sdist
+# is broken — see comment on that extra). When melotts ships a fixed PyPI
+# release, this can drop back to false.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 # Dist name is voice-forge-tts but the import package is voice_forge.

@@ -18,6 +18,24 @@
 
 ---
 
+## P3 — MeloTTS install blocked on upstream packaging quality (arm64 macOS)
+
+**Priority.** P3 — gated by upstream. The voice-forge side is shipped + ready; what's blocked is the actual provisioning command.
+
+**Effort.** Zero on our side until upstream is fixable. When/if upstream lands a clean wheel for arm64 macOS + modern Python, the existing `voice-forge backend install melotts` should "just work" — no code changes needed.
+
+**Worth it when.** myshell-ai/MeloTTS publishes either (a) a fixed PyPI sdist, (b) modern arm64 wheels for its transformers + tokenizers transitive closure, or (c) loosens the `transformers==4.27.4` pin so a recent wheel-covered version can satisfy.
+
+**Context.** Discovered 2026-05-25 by running the real install. Three layered defects (see [LEARNINGS § "Upstream packaging defects in TTS backend ecosystem"](LEARNINGS.md)):
+
+1. MeloTTS==0.1.1's PyPI sdist is broken (missing src/requirements.txt). Bypassed by installing from git.
+2. Transitive dep `fugashi` requires system MeCab. Bypassed by `brew install mecab`.
+3. Transitive dep `tokenizers==0.13.3` lacks macOS arm64 wheels — requires Rust toolchain to build from source.
+
+The backend module (`src/voice_forge/backends/melotts.py`), CLI integration, and KNOWN_TUNABLES schema are all shipped. `/v1/backends` advertises melotts; attempting to load() raises SubprocessBackendNotInstalled with the install-command hint.
+
+---
+
 ## P3 — Cap voice_id cardinality on /metrics
 
 **Priority.** P3 — only matters when voice-forge runs a multi-tenant deploy with hundreds+ of voice_ids and a Prometheus scraper.
