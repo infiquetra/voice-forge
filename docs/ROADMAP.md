@@ -18,35 +18,55 @@
 - [x] Docker image (single-stage build for CPU)
 - [x] CI: lint, format, type-check, tests on push
 
-## v0.2.0 — pluggable proof (in progress)
+## v0.2.0 — pluggable proof (SHIPPED 2026-05-25)
 
-**Goal:** Validate the pluggable-backend abstraction by adding a second backend without touching the dispatch code, plus ship PyPI distribution and an audio audition harness for the Asgard fleet. See [`.claude/plans/lets-take-a-look-optimized-koala.md`](../.claude/plans/lets-take-a-look-optimized-koala.md) for the locked plan.
+**Goal:** Validate the pluggable-backend abstraction by adding a second backend without touching the dispatch code, plus ship PyPI distribution and an audio audition harness for the Asgard fleet.
 
-- [ ] Backend dispatch refactor — drop the hard-coded `if name == "neutts"` branches; registry-driven via `load_backend_module()`
-- [ ] **Kokoro backend** (hexgrad/kokoro, Apache-2, PyTorch+MPS — validates preset-voice arm of `VoiceRef`)
-- [ ] Voice-mixing syntax (Kokoro-style `name(weight)+name(weight)`) — parser ships; full tensor blending may slip to v0.2.x
-- [ ] NeuTTS backend body test coverage via `sys.modules` injection
-- [ ] PyPI publishing pipeline (OIDC trusted publishing; dist name `voice-forge-tts`)
-- [ ] Cleanup tail: version harmonization, dist rename, /tmp upload leak fix, Whisper threadpool wrap, `_porting/` relocation, journal hygiene
-- [ ] Asgard audition harness (`scripts/sync_fleet_from_home_lab.py` + `scripts/asgard_audition.py` producing 27 audible WAVs + HTML index)
+**Core v0.2 plan (all shipped):**
 
-**Deferred to v0.2.x:**
-- Kitten backend (ONNX, CPU-only)
-- WebSocket bidirectional streaming
-- Wyoming protocol adapter (Home Assistant integration)
-- Proper `speed` field plumbing through TTSBackend Protocol
+- [x] Backend dispatch refactor — drop the hard-coded `if name == "neutts"` branches; registry-driven via `load_backend_module()` (commit `ed0a7ba`)
+- [x] **Kokoro backend** (hexgrad/kokoro, Apache-2, PyTorch+MPS — validates preset-voice arm of `VoiceRef`) (commit `679e23b`)
+- [x] Voice-mixing syntax (Kokoro-style `name(weight)+name(weight)`) — parser shipped (commit `679e23b`); full tensor blending stays queued
+- [x] NeuTTS backend body test coverage via `sys.modules` injection (commit `ed0a7ba`)
+- [x] PyPI publishing pipeline (OIDC trusted publishing; dist name `voice-forge-tts`) (commit `4eb02c4`)
+- [x] Cleanup tail: version harmonization, dist rename, /tmp upload leak fix, Whisper threadpool wrap, `_porting/` relocation, journal hygiene (commit `cd00cbd`)
+- [x] Asgard audition harness (`scripts/sync_fleet_from_home_lab.py` + `scripts/asgard_audition.py`) (commit `4eb02c4`)
 
-## v0.3.0 — quality + breadth
+**Pulled forward into v0.2 (originally v0.3):**
 
-**Goal:** Add the heavier-but-higher-quality backends + long-form options.
+- [x] **F5-TTS backend** (commit `60db36a`) — became the **default backend** (DECISIONS 2026-05-25)
+- [x] **XTTS-v2 backend** (commit `d7610f5`) — license-gated via `COQUI_TOS_AGREED=1`
+- [x] **Dia-1.6B backend** (commit `2a0a846`) — ships with documented caveats
 
-- [x] **F5-TTS backend** (MIT wrapper / Apache-2 model, diffusion-based, voice cloning — pulled forward into v0.2 to test the pluggable abstraction with a third paradigm; no 30s cliff)
-- [x] **XTTS-v2 backend** (MPL-2 lib / CPML weights, multilingual + voice cloning — pulled forward into v0.2; identity-cloning verdict: pitch/gender adapter only, not accent-preserving)
-- [x] **Dia backend** (first community wrapper; multi-speaker via [S1]/[S2] tags — pulled forward into v0.2; Apple Silicon MPS verified; ships with caveats: default `max_new_tokens` truncates long-form, faster pacing than other backends, Heid ref-WAV breaks short utterances like NeuTTS)
-- [ ] **Piper backend** (subprocess-call wrapper; GPL-3 safe; 30+ languages)
-- ~~VibeVoice backend~~ — REJECTED 2026-05-25; see ARCHIVE.md
-- [ ] Per-voice sampling-param overrides (speed, nfe_step, cfg_strength, temperature, top_k, repeat_penalty) — see [QUEUED P2](engineering-journal/QUEUED.md)
-- [ ] OpenAI-API-compatible "api_key" header for SDK drop-in
+**Bonus work that landed in v0.2:**
+
+- [x] Per-voice sampling-param overrides (`nfe_step`, `cfg_strength`, `temperature`, `top_p`, `top_k`, `repeat_penalty`, etc.) wired across F5, Dia, Kokoro, XTTS (commits `499564e`, `a2e045e`)
+- [x] **HTTP layer-1 chunked streaming** with sentence-boundary chunker (commit `5c144c8`) — 10× first-audio win on F5 long-form
+- [x] **WebSocket layer-2 streaming** (`WS /v1/tts/stream`) for LLM-driven pipelines (commit `694b0fe`)
+- [x] **Live in-browser demo** at `GET /demo` with Web Audio API playback (commit `2c2ea10`)
+- [x] F5 streaming preset (`nfe_step=16`) verified audibly equivalent to 32-step on 11-sentence stress test (commit `eab204c`, LEARNINGS 2026-05-25)
+- [x] F5 default backend lock-in across CLI / REST / registry defaults (commit `eab204c`)
+- [x] torch 2.8 / torchaudio 2.8 / torchcodec 0.7 pin in the `[f5]` extra to work around the torch 2.9 + torchcodec 0.13 ABI gap (LEARNINGS 2026-05-25)
+
+**Deferred to later versions:**
+- Kitten backend (ONNX, CPU-only) → v0.3+
+- Wyoming protocol adapter (Home Assistant integration) → v0.3+
+- Proper `speed` field plumbing through `TTSBackend` Protocol → v0.3
+- Voice-mixing tensor blending → v0.3+
+
+## v0.3.0 — production hardening (planned)
+
+**Goal:** Make voice-forge safe to expose beyond `127.0.0.1` and easy for outside users to deploy.
+
+- [ ] **Bearer-token auth** — `Authorization: Bearer <token>` for REST, first-frame token for WS — see [QUEUED](engineering-journal/QUEUED.md) § "OpenAI-API-compatible authentication"
+- [ ] **Observability** — `GET /metrics` Prometheus endpoint (synth latency p50/p95, backends loaded, per-voice request counters)
+- [ ] **WS layer-2 pipelining** — synth sentence N+1 while sending sentence N (task #21)
+- [ ] **F5 accent retention tuning** — `cfg_strength` per-voice experimentation (task #20)
+- [ ] **Piper backend** (subprocess-call wrapper; GPL-3 safe; 30+ languages) — depends on the subprocess-isolated backend pattern (task #15)
+- [ ] **Subprocess-isolated backend pattern** (task #15) — unblocks Chatterbox + Piper; backends with hostile dep pins live in their own venvs
+- [ ] **Wyoming protocol adapter** (Home Assistant integration)
+- [ ] **Hermes-agent integration** to actually consume streaming end-to-end — task #23, work is in `infiquetra/home-lab`, not voice-forge
+- [ ] Pre-commit hooks (ruff, mypy, bandit, black) — was deferred from v0.2
 
 ## v0.4.0 — distributed + multi-tenant
 
@@ -54,15 +74,15 @@
 
 - [ ] S3-compatible voice registry backend (in addition to FS)
 - [ ] SQLite voice registry for richer queries
-- [ ] Auth: bearer tokens, per-tenant rate limiting
+- [ ] Per-tenant rate limiting + voice namespacing
 - [ ] Helm chart for Kubernetes deploy
 - [ ] Distributed inference: voice-forge router + worker fleet
 
 ## Future / Maybe
 
 - [ ] **MeloTTS backend** (multilingual, CPU-friendly, MIT)
-- [ ] **Chatterbox-Turbo backend** (sub-200ms latency, MIT)
-- [ ] **Fish Audio S2 Pro backend** (80+ languages, voice cloning)
+- [ ] **Chatterbox-Turbo backend** (sub-200ms latency, MIT) — task #16, deferred behind subprocess-isolated pattern (#15)
+- [ ] **Fish Audio S2 Pro backend** (80+ languages, voice cloning) — task #17, deferred — research-license + hostile deps
 - [ ] ElevenLabs proxy backend (cloud passthrough for fallback)
 - [ ] OpenAI-TTS-proxy backend (use OpenAI's gpt-4o-mini-tts as a backend)
 - [ ] Voice Lab: bulk pull from ElevenLabs (whole workspace)
