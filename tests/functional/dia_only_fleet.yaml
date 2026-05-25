@@ -1,0 +1,23 @@
+# Dia-only fleet for the v0.2 cross-backend audition.
+#
+# Same Saga / Heid / Hnoss IDs (matching responses.yaml) so we read the
+# identical text our prior NeuTTS / Kokoro / F5 / XTTS rows did. Output
+# WAVs land in a fresh dir; the prior backends' outputs stay intact.
+
+- id: saga
+  display_name: "Saga · Dia-1.6B clone (same ref)"
+  voice_id: saga-comms-dia
+  backend: dia
+  target_agent: Loki
+
+- id: heid
+  display_name: "Heid · Dia-1.6B clone (same ref)"
+  voice_id: heid-research-dia
+  backend: dia
+  target_agent: Bragi
+
+- id: hnoss
+  display_name: "Hnoss · Dia-1.6B clone (same ref)"
+  voice_id: hnoss-books-dia
+  backend: dia
+  target_agent: Heimdall

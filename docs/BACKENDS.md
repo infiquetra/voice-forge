@@ -12,10 +12,11 @@ For the abstraction itself — the `TTSBackend` Protocol, the `VoiceRef` union d
 
 | Backend | License (lib / weights) | Voice paradigm | Cloning fidelity (M-Silicon ear-test) | Cold load | Resident RSS | RTF (M2 Ultra) | Status |
 |---|---|---|---|---|---|---|---|
-| **NeuTTS Air (Q8 GGUF)** | Apache-2 / Apache-2 | Ref-WAV cloning | **Identity-preserving** (production baseline) | ~26 s | ~5.6 GB | 0.80 (CPU) | shipped v0.1 |
+| **NeuTTS Air (Q8 GGUF)** | Apache-2 / Apache-2 | Ref-WAV cloning (autoregressive) | **Identity-preserving** (production baseline) | ~26 s | ~5.6 GB | 0.80 (CPU) | shipped v0.1 |
 | **Kokoro 82M** | Apache-2 / Apache-2 | Preset (~54 embeddings) | N/A (no cloning) | ~3.6 s | ~1.4 GB | 0.07 (CPU) | shipped v0.2 |
 | **F5-TTS** | MIT / Apache-2 | Ref-WAV cloning (diffusion) | **Identity-preserving** (Saga + Hnoss held; Heid drifted) | ~37 s (+1.5 GB DL) | ~1.5 GB | 1.05 (MPS) | shipped v0.2 |
 | **XTTS-v2** | MPL-2 / **CPML (non-commercial)** | Ref-WAV cloning + multilingual | **Pitch/gender only** — no accent preservation | ~51 s (+1.8 GB DL) | ~2.0 GB | 1.57 (CPU; MPS 5× slower) | shipped v0.2 |
+| **Dia-1.6B** | Apache-2 / Apache-2 | Ref-WAV cloning + multi-speaker tags ([S1]/[S2]) | **Mixed — Heid wrong-gender; default cap truncates long-form to ~18-21s** | ~120 s (+3 GB DL) | ~3 GB est | ~3-5 (MPS, 1.6B params) | shipped v0.2 (with caveats) |
 
 **Read the cloning-fidelity column.** "Voice cloning" is a spectrum, not a binary. Three of these backends accept a ref WAV; only NeuTTS + F5 preserve speaker identity in the audible-to-an-ear-test sense. XTTS-v2 produces clean audio that adapts pitch + gender to the ref but loses accent and persona character — see [LEARNINGS § Cloning fidelity is a spectrum](engineering-journal/LEARNINGS.md#cloning-fidelity-is-a-spectrum-not-a-binary--xtts-v2-produces-clean-audio-with-zero-accent-preservation).
 
@@ -180,6 +181,38 @@ voice-forge voice add saga-xtts /path/to/saga-ref.wav --ref-text "ignored by xtt
 ```
 
 (`voice add` will Whisper-transcribe if `--ref-text` is omitted; XTTS doesn't care what the transcript says but the registry expects a `ref.txt` so it's recorded anyway for compatibility with other backends.)
+
+## Dia-1.6B (Nari Labs)
+
+- **License:** Apache-2.0 (both [`nari-labs/dia`](https://github.com/nari-labs/dia) repo AND the model weights at `nari-labs/Dia-1.6B-0626` on HuggingFace).
+- **PyPI:** none — accessed via native `transformers.DiaForConditionalGeneration` (added in transformers 4.46+). The `[dia]` extra pins `transformers>=4.46,<5` + `librosa>=0.10` (for the 44.1→24 kHz resample).
+- **Default model:** `nari-labs/Dia-1.6B-0626` (~3 GB on disk after first HF download)
+- **Inference engine:** PyTorch via HF Transformers (Apple Silicon: MPS autodetect; 1.6B params, big enough to amortize MPS launch overhead)
+- **Voice paradigm:** Ref-WAV cloning + **multi-speaker dialogue** via `[S1]` / `[S2]` tags. v0.2 audition only exercises single-speaker; multi-speaker is a follow-up.
+- **Sample rate:** 44.1 kHz native; voice-forge resamples to 24 kHz to match the Protocol convention.
+- **Streaming:** No native streaming through HF Transformers's `generate()` surface; `synthesize_stream` degrades to one chunk.
+
+### Dia quirks worth knowing (and there are several)
+
+- **`max_new_tokens=3072` default caps output at ~18-21 s in practice** (theoretical ceiling 35.7 s at 86 tokens/s, but in our audition the ref-transcript prefix consumed budget too, leaving ~18 s for actual generation). Long-form text gets truncated, NOT rushed. For p3 stories (~80 s expected) bump `max_new_tokens` to 8192 or higher; per-voice tuning ([QUEUED P2](engineering-journal/QUEUED.md)) is the right home for this.
+- **Heid's ref WAV broke Dia exactly like NeuTTS** — 0.19 s of audio for "Can you hear me?", same ~0.16-0.20 s collapse the autoregressive llama-cpp path produces. **Third autoregressive sampler to fail on this specific reference.** F5 (diffusion), Kokoro (encoder-decoder), XTTS (decoder with CFG) all handle the same ref + text cleanly. **The ref WAV itself is doing something that breaks autoregressive token-sampling stop conditions.** See [LEARNINGS § Heid ref breaks autoregressive sampling](engineering-journal/LEARNINGS.md).
+- **Heid came out wrong-gender on Dia** — user verdict 2026-05-25 listening to the v0.2 audition: "voices [are] too fast and even wrong gender in heid's case." Adds to the evidence that Heid's ref is problematic.
+- **All p2 outputs sound faster than expected** — same text in 11-16 s where F5 used 16-20 s. Likely Dia's documented "long input → unnaturally fast speech" behavior; input is ref-transcript + gen-text, which together exceed Dia's sweet spot.
+- **Prompt format is opinionated.** Upstream requires text to begin with `[S1]`, and for cloning specifically: `[S1] {ref_text} [S1] {gen_text}`. voice-forge formats this internally — users don't need to know.
+- **15-minute audition for 9 WAVs on M2 Ultra MPS** — Dia is the slowest backend we've shipped. ~3-5 RTF estimate. Mostly the 1.6B-param MPS pass; the 3 GB model download dominates the first-run cold-load.
+- **Sampling defaults** are upstream-recommended: `max_new_tokens=3072, guidance_scale=3.0, temperature=1.8, top_p=0.90, top_k=45`. All exposed via the `config` dict passed to `load()`.
+
+### When to use Dia anyway
+
+Dia is the only backend voice-forge ships in v0.2 with **multi-speaker dialogue** capability (`[S1]`/`[S2]` tags in input text). For dialogue-shaped content where you want two voices conversing in one synth call — interactive fiction, agent-to-agent conversations, audiobook-style narration — Dia is the right tool. For single-speaker persona TTS on long-form content, F5 is the better pick today; revisit Dia once per-voice `max_new_tokens` tuning ships.
+
+### Adding a Dia voice
+
+```bash
+voice-forge voice add saga-dia /path/to/saga-ref.wav --ref-text "matching transcript" --backend dia
+```
+
+Same shape as NeuTTS / F5. For multi-speaker reference (the unique Dia feature), the ref WAV should contain both speakers alternating, with the transcript using `[S1]`/`[S2]` tags. v0.2 doesn't yet expose a CLI flag for multi-speaker; this lands with the per-voice tunable params work.
 
 ## Backends queued for future versions
 

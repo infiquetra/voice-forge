@@ -91,6 +91,7 @@ _BACKEND_MODULES: dict[str, str] = {
     "kokoro": "voice_forge.backends.kokoro",
     "f5": "voice_forge.backends.f5",
     "xtts": "voice_forge.backends.xtts",
+    "dia": "voice_forge.backends.dia",
 }
 
 

@@ -42,7 +42,7 @@
 
 - [x] **F5-TTS backend** (MIT wrapper / Apache-2 model, diffusion-based, voice cloning — pulled forward into v0.2 to test the pluggable abstraction with a third paradigm; no 30s cliff)
 - [x] **XTTS-v2 backend** (MPL-2 lib / CPML weights, multilingual + voice cloning — pulled forward into v0.2; identity-cloning verdict: pitch/gender adapter only, not accent-preserving)
-- [ ] **Dia backend** (first community wrapper; multi-speaker via [S1]/[S2] tags; needs Apple Silicon MPS validation)
+- [x] **Dia backend** (first community wrapper; multi-speaker via [S1]/[S2] tags — pulled forward into v0.2; Apple Silicon MPS verified; ships with caveats: default `max_new_tokens` truncates long-form, faster pacing than other backends, Heid ref-WAV breaks short utterances like NeuTTS)
 - [ ] **VibeVoice backend** (if licensing checks out — directly addresses long-form narrative quality)
 - [ ] **Piper backend** (subprocess-call wrapper; GPL-3 safe; 30+ languages)
 - [ ] Per-voice sampling-param overrides (speed, nfe_step, cfg_strength, temperature, top_k, repeat_penalty) — see [QUEUED P2](engineering-journal/QUEUED.md)

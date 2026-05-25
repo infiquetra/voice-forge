@@ -57,12 +57,20 @@ xtts = [
     "coqui-tts>=0.27,<0.30",
     "transformers<5",
 ]
+dia = [
+    # Dia-1.6B backend (Apache-2, nari-labs/Dia-1.6B-0626; multi-speaker + cloning).
+    # No standalone PyPI package — accessed via HF Transformers's native
+    # DiaForConditionalGeneration class (added in transformers 4.46+).
+    # `librosa` for 44.1 → 24 kHz resampling.
+    "transformers>=4.46,<5",
+    "librosa>=0.10",
+]
 voice-lab = [
     # ElevenLabs Voice Lab puller + Whisper ref-trimmer
     "faster-whisper>=1.0",
 ]
 all = [
-    "voice-forge-tts[neutts,kokoro,f5,xtts,voice-lab]",
+    "voice-forge-tts[neutts,kokoro,f5,xtts,dia,voice-lab]",
 ]
 dev = [
     "pytest>=8.0",
@@ -131,6 +139,8 @@ module = [
     "f5_tts.*",
     "TTS",
     "TTS.*",
+    "soundfile",
+    "librosa",
 ]
 ignore_missing_imports = true
 

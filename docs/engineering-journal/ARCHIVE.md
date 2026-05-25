@@ -9,6 +9,41 @@
 
 ---
 
+## SHIPPED 2026-05-25 — v0.2: Dia-1.6B backend (Nari Labs, multi-speaker + cloning, Apache-2)
+
+**Commit:** (this commit; latest on the `worktree-v0.2-pluggable-proof` branch)
+**From ROADMAP v0.3 (pulled forward):** "Dia backend (first community wrapper; multi-speaker via [S1]/[S2] tags)"
+
+Adds `src/voice_forge/backends/dia.py` using the **native HuggingFace Transformers integration** (no separate pip install — `transformers>=4.46` ships `DiaForConditionalGeneration` directly). Apache-2 model weights + Apache-2 repo. Voice-forge's first multi-speaker-capable backend (`[S1]`/`[S2]` tags in input text).
+
+13 new tests in `tests/unit/test_dia_backend.py` cover load, the Dia-specific prompt format (`[S1] {ref_text} [S1] {gen_text}`), sample-rate resampling (44.1 → 24 kHz), sampling params threading, guard rails. Fake stub at `tests/_stubs/fake_dialib.py` monkey-patches `transformers.AutoProcessor` + `transformers.DiaForConditionalGeneration` rather than swapping the whole `sys.modules["transformers"]` (which would break fastapi imports). Full suite: 113 passed.
+
+Audition (`tests/functional/output/v0.2-dia-20260525T055909Z/`) on the 3-sister test fleet (saga/heid/hnoss) revealed material caveats:
+
+| Aspect | Outcome |
+|---|---|
+| Cloning fidelity | **Mixed** — Heid wrong-gender; Saga/Hnoss closer to ref but not at F5's level |
+| Long-form (p3 ~80s text) | **Truncated to 18-21 s** by default `max_new_tokens=3072` cap |
+| Heid p1 short utterance | **0.19 s broken** — same failure mode as NeuTTS p1 |
+| Audio pacing | **Faster than NeuTTS/F5/Kokoro/XTTS** on same text — Dia's documented "long input → unnaturally fast speech" behavior |
+| RTF on M2 Ultra MPS | ~3-5 (slowest backend voice-forge ships) |
+| Cold load | ~120 s including 3 GB HF download |
+
+User listening verdict 2026-05-25: "voices [are] too fast and even wrong gender in heid's case."
+
+**Three new LEARNINGS captured:**
+1. **Heid's ref WAV breaks autoregressive sampling specifically** — third backend (NeuTTS + Dia + reproduction) to fail on Heid p1 with 0.16-0.20 s output. F5 + Kokoro + XTTS (all non-autoregressive samplers) handle the same ref cleanly. The ref WAV is the bug, not the backend.
+2. **Dia `max_new_tokens=3072` empirically caps at ~18-21 s** (not theoretical 35.7 s) because the ref-transcript prefix consumes budget. First concrete use case for per-voice tunable params.
+3. (XTTS finding from earlier) ... unchanged.
+
+`pyproject.toml`: `[dia] = ["transformers>=4.46,<5", "librosa>=0.10"]` — no new heavy install since transformers + librosa are already in the venv via other backends. `all` extra includes dia. `_BACKEND_MODULES` registers `"dia"`. mypy override adds `soundfile` + `librosa` (now actually used).
+
+`docs/BACKENDS.md` gets a full Dia section with the four-caveat list (max_new_tokens cap, Heid ref-WAV failure, faster pacing, 15-min audition wall-clock) and a "when to use Dia anyway" subsection focused on the unique multi-speaker capability. `docs/ROADMAP.md` ticks Dia as shipped early.
+
+**v0.2 status after Dia:** 5 backends shipped (NeuTTS, Kokoro, F5, XTTS, Dia). The pluggable abstraction validated across 5 architectural paradigms (autoregressive llama-cpp / encoder-decoder / diffusion / decoder-with-CFG / autoregressive transformer-token).
+
+---
+
 ## SHIPPED 2026-05-25 — v0.2: XTTS-v2 backend (Coqui idiap fork, multilingual cloning)
 
 **Commit:** (this commit; latest on the `worktree-v0.2-pluggable-proof` branch)

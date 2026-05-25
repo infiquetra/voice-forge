@@ -27,6 +27,68 @@
 
 ## 2026-05-25
 
+### Heid's reference WAV breaks autoregressive token-sampling — three backends, same failure mode
+
+**Context.** Across five backends (NeuTTS, Kokoro, F5, XTTS, Dia) auditioned against the same 9 Asgard sister refs from `infiquetra/home-lab/.../persona_refs/`, **Heid's `ref.wav` + "Can you hear me?" produces a 0.16-0.20 s near-silent WAV on every autoregressive backend tested**. The other 8 sisters' refs work fine on the same backends with the same prompt.
+
+**Evidence.** Three independent audition runs, three different autoregressive sampling architectures, same failure:
+
+| Backend | Architecture | Heid p1 duration | Other sisters' p1 duration |
+|---|---|---|---|
+| NeuTTS Air Q8 | llama-cpp autoregressive token sampler | 0.20 s | 0.94 - 2.72 s |
+| Dia-1.6B | HF Transformers `generate()` autoregressive | 0.19 s | 1.08 - 1.16 s |
+| (NeuTTS reproduction) | (same as above) | 0.16-0.20 s (multiple runs) | (same) |
+
+Backends that DO handle Heid p1 correctly:
+
+| Backend | Architecture | Heid p1 duration |
+|---|---|---|
+| Kokoro 82M | encoder-decoder (no autoregressive token sampling for speech) | 1.60 s |
+| F5-TTS | flow-matching diffusion | 1.18 s |
+| XTTS-v2 | decoder-with-CFG (not pure autoregressive) | 1.43 s |
+
+The split is clean: **autoregressive samplers fail; non-autoregressive don't**.
+
+**Mechanism (hypothesis).** Autoregressive TTS samples speech tokens one at a time and terminates when the model emits a stop / end-of-speech token. Something about Heid's `ref.wav` — when encoded into the model's conditioning latent — pushes the autoregressive decoder toward emitting a stop token almost immediately. This isn't a "the model can't handle short utterances" issue (Saga p1 works on the same backends with similar text). It's specific to Heid's ref.
+
+Candidate root causes inside `heid-research/ref.wav`:
+- **Trailing silence or low-energy tail** that the model encodes as "speaker is done" — encourages early stop.
+- **Specific acoustic features** (breathiness, low-frequency content, post-recording compression artifacts) that map to internal "this is an ending" embedding region.
+- **Length above the model's training-distribution** for refs — but other sister refs are similar duration, so probably not this.
+- **Speech-pace artifact** — Heid speaks slowly in her ref, the model "learns" she's leaving long pauses, then emits stop after one short word.
+
+**Fix (queued).** Two follow-ups:
+1. **Inspect and re-trim `heid-research/ref.wav`.** Compare its waveform / spectrogram to Saga's (which works). Look for trailing silence, weird endings, or low-energy artifacts. `voice_lab.trim_to_sentence_boundary` may need to be re-run with stricter parameters for this ref.
+2. **Add a heuristic in cloning backends** to detect this failure mode (synth returned < 0.5 s of audio) and **retry with stochastic re-seeding**. This is generic across autoregressive backends.
+
+Heid also produced wrong-gender output on Dia (user verdict 2026-05-25: "even wrong gender in heid's case") — additional evidence the ref is problematic. F5 also drifted on Heid (held Saga + Hnoss, lost Heid).
+
+**Generalizable rule.** **When the same ref breaks multiple backends with the same architectural family, the ref is the bug, not the backend.** Empirical pattern recognition only emerges from auditioning the same data across many backends — exactly what the audition harness is for. Single-backend audits would have attributed each failure to "this backend has issues with short text" or similar single-cause story.
+
+Subsidiary rule: **the audition harness has high leverage for finding cross-backend invariants** that you can't see when looking at one backend in isolation. Keep auditioning.
+
+**Refs.** `infiquetra/home-lab/ansible/roles/hermes_neutts_daemon/files/persona_refs/heid-research/ref.wav` (the suspect), audition runs `tests/functional/output/v0.2-mac-studio-20260525T025950Z/` (initial NeuTTS reproduction), `v0.2-triple-20260525T045249Z/` (NeuTTS + F5 + Kokoro), `v0.2-dia-20260525T055909Z/` (Dia), [F5 voice-fidelity variance](#f5-voice-fidelity-variance--heid-drifted-saga--hnoss-held-on-identical-reference-audio).
+
+---
+
+### Dia-1.6B `max_new_tokens=3072` is too small for long-form — truncates at ~18-21 s, not at the theoretical 35.7 s
+
+**Context.** Dia's upstream README recommends `max_new_tokens=3072` as the default. At 86 audio tokens per second, that's a theoretical ceiling of 35.7 s of generated audio. The v0.2 audition's p3 stories are ~80 s of expected audio (200 words at 150 wpm) — way above the cap. We expected truncation around 36 s.
+
+**Evidence.** Audition `v0.2-dia-20260525T055909Z`: all three sisters' p3 stories truncated **at ~18-21 s, not 36 s**. p2 (~30 s expected) came out at 11-16 s — also short. The prompts that fit well within the cap (p1 ~2 s) generated cleanly.
+
+**Mechanism.** Dia's prompt format for cloning is `[S1] {ref_text} [S1] {gen_text}`. The ref transcript (typically 15-25 tokens for the Asgard sisters' ~10 s refs) plus the generation text + special tokens all consume the `max_new_tokens` budget. So the effective budget for the actual output text is `3072 - ref_tokens - overhead` ≈ 1500-2000 tokens ≈ 17-23 s of audio. Matches the empirical truncation.
+
+**Fix (workaround).** For long-form Dia synth: pass `max_new_tokens=8192` (≈95 s) or higher via the backend config. This is the **first concrete use case for the per-voice tunable params system** (QUEUED P2). Voices with long-form requirements would set `sampling.max_new_tokens=8192` in their `metadata.json`; voices with short-form (notifications, system prompts) keep the default.
+
+**What surprised.** That the cap kicked in below the theoretical token math suggests something other than tokens/s rate is at play — possibly Dia's special tokens (speaker tags, stop tokens) account for a non-trivial overhead per chunk. The empirical 18-21 s budget should be the working assumption when sizing `max_new_tokens` for Dia, not the theoretical 35.7 s.
+
+**Generalizable rule.** **A backend's "default" generation params are often tuned for the backend's authors' use case, not yours.** Always plan to override them on a per-voice basis once a real audit surfaces their behavior. The per-voice tunable params system isn't a nice-to-have — it's the difference between "this backend works for our content" and "this backend only works for content matching the upstream demo."
+
+**Refs.** `src/voice_forge/backends/dia.py:DEFAULT_MAX_NEW_TOKENS`, [QUEUED § Per-voice tunable sampling params](QUEUED.md), audition results `v0.2-dia-20260525T055909Z`.
+
+---
+
 ### Cloning fidelity is a spectrum, not a binary — XTTS-v2 produces clean audio with zero accent preservation
 
 **Context.** Triple- + quad-backend audition runs against the 9 Asgard sister refs surfaced an unexpected per-backend behavior that PRIOR_ART.md's "voice cloning" cell didn't capture. Each backend successfully cloned in the literal sense (took a ref WAV, returned audio that wasn't the default voice), but the *degree* of cloning varies dramatically.
