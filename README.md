@@ -55,6 +55,19 @@ curl http://127.0.0.1:9876/v1/audio/speech \
 - Other backends: see [ROADMAP.md](docs/ROADMAP.md)
 - API: REST (chunked transfer for streaming). WebSocket + Wyoming opt-in adapters planned for v0.2.
 
+## Context for new contributors
+
+If you're starting fresh on this repo, the engineering journal at [`docs/engineering-journal/`](docs/engineering-journal/) is the read-this-first place. It contains:
+
+- [`narratives/2026-05-24-pre-history.md`](docs/engineering-journal/narratives/2026-05-24-pre-history.md) — what we learned from the NeuTTS daemon prototype that motivated this repo
+- [`narratives/2026-05-24-voice-forge-spin-out.md`](docs/engineering-journal/narratives/2026-05-24-voice-forge-spin-out.md) — why we spun out from `infiquetra/home-lab` instead of building in-place
+- [`LEARNINGS.md`](docs/engineering-journal/LEARNINGS.md) — 8 empirical findings (Q4+CPU faster than MPS, Perth watermarker artifacts, NeuTTS streaming content-loss, MP3 default bitrate gotcha, etc.) with mechanisms + fixes + generalizable rules
+- [`DECISIONS.md`](docs/engineering-journal/DECISIONS.md) — 5 locked architectural choices (Apache-2, Q8 default, batch default, Protocol abstraction, REST surface) with rejected alternatives + revisit-when conditions
+- [`QUEUED.md`](docs/engineering-journal/QUEUED.md) — ~20 prioritized future work items: backends (F5, XTTS, Kokoro, Dia, Kitten, MeloTTS, VibeVoice, Chatterbox, Piper), WebSocket / Wyoming, PyPI publishing, auth, etc.
+- [`docs/PRIOR_ART.md`](docs/PRIOR_ART.md) — comparative study of 12 prior projects (Coqui, OpenedAI-Speech, xtts-streaming-server, Kokoro-FastAPI, Wyoming, Dia, Kitten + BentoML/Inworld surveys) with license compatibility matrix
+
+Together these answer "why is voice-forge designed the way it is" + "what's the next work to do" without requiring you to read the `infiquetra/home-lab` repo where this prototype originated.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Short version:
