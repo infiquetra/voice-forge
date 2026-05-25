@@ -54,7 +54,7 @@
   <select id="voice"><option value="">(loading...)</option></select>
 
   <label for="text">Text</label>
-  <textarea id="text">Once upon a time, Loki visited my archive. He said he was lost. I knew that was a lie, of course, but I let him search anyway. He never found what he claimed to be looking for.</textarea>
+  <textarea id="text">I have a favorite memory of Loki, and I have kept it on the highest shelf for years. He had been telling lies all week — small ones, harmless ones, the sort he tells when he is bored and wants to see who is paying attention. I had been quietly recording each one, as I record most things. There was the story about the missing kettle, which had never been missing. There was the one about the supplier in Akureyri, who, when I checked, turned out not to exist at all. There was the elaborate tale of his Tuesday morning, which contradicted his own account from Monday afternoon. When I had compiled thirty-seven of them, I sat down beside him and read them back in order. He listened patiently for nearly twenty minutes. Then he laughed, said I had improved his material, and asked if I would proofread his next round. I told him I would, but only on the condition that he submit them in writing. He has been quieter ever since, which I count as either a victory or a loss, depending on the day.</textarea>
 
   <label for="trickle">Trickle mode</label>
   <div class="row">
@@ -163,10 +163,21 @@
       if (voices.length === 0) {
         setVoiceOptions([{ value: '', text: '(no voices in registry)' }]);
       } else {
-        setVoiceOptions(voices.map(v => ({
-          value: v.id,
-          text: v.id + ' (' + v.backend + ')',
-        })));
+        setVoiceOptions(voices.map(v => {
+          // Surface sampling overrides in the label so e.g.
+          //   saga-comms-f5         → "saga-comms-f5 · f5"
+          //   saga-comms-f5-fast    → "saga-comms-f5-fast · f5 · nfe_step=16"
+          // Picking between tuned vs untuned voices is otherwise invisible
+          // from the voice_id alone.
+          const sampling = v.metadata && v.metadata.sampling;
+          const tuneStr = sampling
+            ? Object.entries(sampling).map(([k, val]) => k + '=' + val).join(', ')
+            : '';
+          const text = tuneStr
+            ? v.id + ' · ' + v.backend + ' · ' + tuneStr
+            : v.id + ' · ' + v.backend;
+          return { value: v.id, text: text };
+        }));
       }
     })
     .catch(err => {
