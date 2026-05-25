@@ -49,12 +49,20 @@ f5 = [
     # Wrapper is MIT-licensed; model weights from SWivid/F5-TTS are Apache-2.
     "f5-tts>=1.1,<2.0",
 ]
+xtts = [
+    # XTTS-v2 backend via Coqui idiap fork (MPL-2.0; multilingual + cloning).
+    # transformers<5 pin: coqui-tts 0.27.5 imports
+    # `transformers.pytorch_utils.isin_mps_friendly` which was removed in v5.
+    # Lift the pin when upstream coqui-tts catches up to transformers 5.x.
+    "coqui-tts>=0.27,<0.30",
+    "transformers<5",
+]
 voice-lab = [
     # ElevenLabs Voice Lab puller + Whisper ref-trimmer
     "faster-whisper>=1.0",
 ]
 all = [
-    "voice-forge-tts[neutts,kokoro,f5,voice-lab]",
+    "voice-forge-tts[neutts,kokoro,f5,xtts,voice-lab]",
 ]
 dev = [
     "pytest>=8.0",
@@ -121,6 +129,8 @@ module = [
     "kokoro",
     "f5_tts",
     "f5_tts.*",
+    "TTS",
+    "TTS.*",
 ]
 ignore_missing_imports = true
 

@@ -1,0 +1,29 @@
+# XTTS-only fleet for the v0.2 cross-backend audition.
+#
+# The NeuTTS / Kokoro / F5 rows for the same sisters already exist in
+# tests/functional/output/v0.2-triple-20260525T045249Z/ — we don't re-synth
+# them. This fleet is what we run after F5 to add XTTS rows on top.
+#
+# Each id matches a key in responses.yaml so the XTTS rows read the SAME
+# Saga / Heid / Hnoss text used by the prior triple-backend audition.
+#
+# voice_id values are *-xtts; backend is xtts; metadata.language is 'en'
+# (set at voice add time).
+
+- id: saga
+  display_name: "Saga · XTTS-v2 clone (same ref)"
+  voice_id: saga-comms-xtts
+  backend: xtts
+  target_agent: Loki
+
+- id: heid
+  display_name: "Heid · XTTS-v2 clone (same ref)"
+  voice_id: heid-research-xtts
+  backend: xtts
+  target_agent: Bragi
+
+- id: hnoss
+  display_name: "Hnoss · XTTS-v2 clone (same ref)"
+  voice_id: hnoss-books-xtts
+  backend: xtts
+  target_agent: Heimdall

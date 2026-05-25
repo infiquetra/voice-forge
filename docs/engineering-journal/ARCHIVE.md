@@ -9,6 +9,41 @@
 
 ---
 
+## SHIPPED 2026-05-25 — v0.2: XTTS-v2 backend (Coqui idiap fork, multilingual cloning)
+
+**Commit:** (this commit; latest on the `worktree-v0.2-pluggable-proof` branch)
+**From ROADMAP v0.3 (pulled forward):** "XTTS-v2 backend (Coqui, MPL-2, multilingual + voice cloning)"
+
+Adds `src/voice_forge/backends/xtts.py` wrapping `coqui-tts==0.27.5` from the [idiap fork](https://github.com/idiap/coqui-ai-TTS) of the now-discontinued upstream Coqui project. Library license MPL-2; **model weights are CPML (non-commercial)** — backend's `load()` requires `COQUI_TOS_AGREED=1` env var as the consent gate.
+
+Cross-backend audition results (XTTS-only fleet at `tests/functional/output/v0.2-xtts-20260525T053201Z/`, comparison to F5/Kokoro/NeuTTS at the prior triple-backend dir):
+
+| Aspect | Outcome |
+|---|---|
+| Audio quality | **Cleanest of the four backends** — no stutter, no artifacts |
+| 30-second cliff | None — all p3 stories ran 61-66 s coherently |
+| Voice-identity cloning | **0/3 sisters preserved** — pitch + gender adapt, accent + persona character lost |
+| RTF (M2 Ultra CPU) | 1.57 |
+| RTF (M2 Ultra MPS) | 8.18 (5× slower than CPU due to per-op fallback churn) |
+| Resident RSS | ~2.0 GB |
+
+User listening verdict 2026-05-25: "All sounded good, no accent on a single one. But no stutter or poor quality." → XTTS is the right backend for "any clean female voice" use cases (system notifications, generic narration) but **does not replace NeuTTS for persona TTS**.
+
+13 new tests in `tests/unit/test_xtts_backend.py` cover load, device pick, the CPML preflight (positive + negative paths), language threading from metadata, missing-ref-audio rejection, ref_text-not-needed behavior, and the synthesize_stream single-chunk degradation. Fake stub at `tests/_stubs/fake_xttslib.py` (mirrors fake_f5lib pattern). Full suite: 100 passed.
+
+Three substantive LEARNINGS captured from XTTS bring-up:
+1. **Cloning fidelity is a spectrum, not binary** — XTTS's failure to preserve accent surfaces a classification axis (identity-preserving vs pitch/gender-adapter vs no-clone) that PRIOR_ART had been glossing over.
+2. **XTTS license is split** — library MPL-2 vs model CPML. PRIOR_ART had it as just MPL-2.
+3. **MPS is 5× slower than CPU on M2 Ultra for XTTS** — opposite of F5, which prefers MPS. Device picks are per-backend codebase-coverage-dependent, not just per-model.
+
+Pyproject: `[xtts] = ["coqui-tts>=0.27,<0.30", "transformers<5"]` (the transformers pin is doc'd inline). `all` extra includes xtts. mypy override for `TTS` + `TTS.*`. `_BACKEND_MODULES` registers `"xtts": "voice_forge.backends.xtts"`.
+
+`docs/BACKENDS.md` gets a full XTTS section with the license split called out explicitly + the device-pick warning + the cloning-fidelity disclaimer at the comparison table. `docs/ROADMAP.md` ticks XTTS as shipped early.
+
+**Effort.** ~3 hours including the license-prompt debugging detour, the transformers version conflict, and the controlled CPU-vs-MPS bench. Net new tests: 13. Files touched: 9.
+
+---
+
 ## SHIPPED 2026-05-25 — v0.2: F5-TTS backend (cloning + long-form, diffusion-based)
 
 **Commit:** (this commit; latest on the `worktree-v0.2-pluggable-proof` branch)

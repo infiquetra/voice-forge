@@ -27,6 +27,92 @@
 
 ## 2026-05-25
 
+### Cloning fidelity is a spectrum, not a binary — XTTS-v2 produces clean audio with zero accent preservation
+
+**Context.** Triple- + quad-backend audition runs against the 9 Asgard sister refs surfaced an unexpected per-backend behavior that PRIOR_ART.md's "voice cloning" cell didn't capture. Each backend successfully cloned in the literal sense (took a ref WAV, returned audio that wasn't the default voice), but the *degree* of cloning varies dramatically.
+
+**Evidence.** User-supplied ear verdicts across two audition runs on identical Asgard refs + identical text:
+
+| Backend | Sister identity preserved? | User verdict |
+|---|---|---|
+| NeuTTS Air | ✓ all 9 (production baseline) | "sounds like the Mac mini" |
+| F5-TTS | ✓ Saga + Hnoss; ❌ Heid drifted | "Held saga and hnoss's, but lost heid's" |
+| XTTS-v2 | ❌ none preserved | "All sounded good, no accent on a single one. But no stutter or poor quality" |
+
+XTTS's failure isn't quality-related — the audio is clean, intelligible, no stutter or artifacts. It's that the cloning step produces a voice that's *adjacent* to the ref (similar gender, similar broad pitch range) but **doesn't preserve accent, fine-grained timbre, or persona character**. The Asgard sisters' refs are American English with distinct individual character; XTTS's outputs are generic-clean American female.
+
+**Mechanism (hypotheses).**
+- **Model age + training data.** XTTS-v2 was released early-2024; trained on a moderate-sized multilingual speaker pool. Speaker embedding capacity may be insufficient to capture fine accent / personal-timbre signal beyond gender + broad pitch.
+- **Encoder architecture.** XTTS uses a fixed-size speaker embedding extracted via its encoder; F5 (and NeuTTS) condition on a longer reference window with more degrees of freedom.
+- **Multilingual trade-off.** XTTS supports 17 languages from one model; the speaker encoder is shared across all of them, which may dilute per-accent specificity.
+
+**Practical implication for voice-forge.** The Asgard use case = sister voices need to sound like specific personas. XTTS is **not viable** for that even though its audio quality is the cleanest of the four backends tested. F5 wins this comparison despite its slower pace + occasional drift (Heid).
+
+For use cases where "any reasonable female voice" is enough (generic narration, system notifications, etc.), XTTS is great. For persona TTS, it doesn't deliver.
+
+**Generalizable rule.** **A "voice cloning backend" label is too coarse.** Better classification:
+- **Identity-preserving clone**: NeuTTS (autoregressive prompted), F5 (diffusion conditioned on long ref), Dia (presumed).
+- **Pitch-and-gender adapter**: XTTS-v2 — produces a voice in the right gender + pitch range as the ref, but loses identity.
+- **No-clone preset**: Kokoro, Kitten — preset embeddings, no ref-audio input.
+
+When adding a new backend to BACKENDS.md, note **which point on this spectrum** it lands at, ideally validated by an audition pass before committing. The Audition harness is the right tool — ear judgment is the validator.
+
+**Decision (provisional).** F5 remains the leading NeuTTS-replacement candidate. XTTS stays in the registry as a "clean-voice-for-non-persona" backend option. Once per-voice tunables ship (QUEUED P2), revisit F5 with Heid-specific tuning to close that one remaining drift.
+
+**Refs.** Audition runs `tests/functional/output/v0.2-triple-20260525T045249Z/` (F5 vs NeuTTS vs Kokoro) and `tests/functional/output/v0.2-xtts-20260525T053201Z/` (XTTS), `src/voice_forge/backends/xtts.py`, [F5 voice-fidelity variance entry](#f5-voice-fidelity-variance--heid-drifted-saga--hnoss-held-on-identical-reference-audio).
+
+---
+
+### XTTS-v2 license is split — coqui-tts library is MPL-2 but the model weights are CPML (non-commercial)
+
+**Context.** When wiring up the XTTS-v2 backend, the first synth attempt blocked on a stdin prompt:
+
+    > "I have purchased a commercial license from Coqui: licensing@coqui.ai"
+    > "Otherwise, I agree to the terms of the non-commercial CPML: https://coqui.ai/cpml" - [y/n]
+
+PRIOR_ART.md had the XTTS-v2 row as MPL-2 — that was wrong. PRIOR_ART was tracking the *library* license; the model weights are a separate licensing question entirely.
+
+**Evidence.** Two distinct license artifacts:
+- **`coqui-tts` PyPI package**: MPL-2.0 (file-level copyleft — safe to depend on for an Apache-2 project, can't directly include the source). Confirmed in `pyproject.toml` metadata.
+- **`tts_models/multilingual/multi-dataset/xtts_v2` model weights**: [Coqui Public Model License (CPML)](https://coqui.ai/cpml) — **non-commercial use only** unless the user has purchased a commercial license from Coqui (licensing@coqui.ai). The runtime auto-prompt is Coqui's compliance gate.
+
+**Mechanism.** "Library license" and "model weights license" are independent. The library is open-source MPL-2 freely; the weights it loads at runtime are governed by a separate license you accept by downloading them from HuggingFace. This split is increasingly common in TTS ecosystem — XTTS-v2, the late-Coqui-era models, certain Microsoft VibeVoice variants all have similar splits.
+
+**Fix.** `XTTSBackend.load()` runs a pre-flight check for `COQUI_TOS_AGREED=1` in the process environment. Missing → `RuntimeError` with the CPML URL and a pointer to `licensing@coqui.ai` for commercial use. voice-forge does **not** accept the license on the user's behalf — they have to opt in explicitly. Documented in `src/voice_forge/backends/xtts.py:load`, `docs/BACKENDS.md` XTTS section, and the `[xtts]` optional-extra comment in `pyproject.toml`.
+
+**What surprised.** That the library + weights license split was invisible until first synth. There's no static metadata that says "this PyPI package will at runtime download CPML-licensed weights." A user reading just the pyproject classifiers would believe XTTS is MPL-2 end-to-end. We're now careful in BACKENDS.md to label the library and model licenses separately.
+
+**Generalizable rule.** **When documenting a backend's license in BACKENDS.md, always list BOTH the wrapper-library license AND the model-weights license separately.** PRIOR_ART.md needs a refresh pass to do this for every entry. Added as a doc-hygiene QUEUED item.
+
+**Refs.** `src/voice_forge/backends/xtts.py:load`, `docs/BACKENDS.md` XTTS section, `pyproject.toml` `[xtts]` extra (with the `transformers<5` pin doc'd inline), [QUEUED.md PyPI publishing](QUEUED.md).
+
+---
+
+### XTTS-v2 MPS is 5× slower than CPU on M2 Ultra — Coqui codebase falls back per-op
+
+**Context.** When picking the device for the XTTS audition, naive intuition said "1.8 GB model, M2 Ultra has 128 GB unified memory, MPS should win." That turned out to be wrong by 5×.
+
+**Evidence.** Identical synth (16-char text against saga-comms ref), back-to-back on the same process:
+
+| Device | Cold load | Warm synth | Audio out | RTF |
+|---|---|---|---|---|
+| CPU | 51.19 s (incl. ~1.5 GB weight download) | 2.03 s | 1.29 s | 1.57 |
+| MPS | 18.39 s (warm, model already downloaded) | **10.56 s** | 1.29 s | **8.18** |
+
+MPS synth is 5× slower than CPU. Switching back to CPU is the correct device pick for XTTS on Apple Silicon.
+
+**Mechanism.** Coqui's TTS codebase has documented patchy MPS support — many operations fall back to CPU mid-graph because the MPS implementation lacks them. Each fallback requires a tensor round-trip between GPU and CPU memory (technically cheap on unified-memory hardware, but each crossing incurs torch's tensor-marshalling cost + kernel-launch overhead). The cumulative per-op churn dominates the synth wall-clock; the "GPU compute" never gets to amortize because most ops aren't running on the GPU anyway.
+
+**Fix.** `XTTSBackend.load()` default `device=None` → CPU. Docstring explicitly recommends CPU on Apple Silicon and warns that MPS is currently 5× slower. If upstream coqui-tts gets the MPS path fixed (e.g., by porting more ops to MPS native), re-bench.
+
+**What surprised.** This is **the opposite** of the F5 result on the same machine: F5 happily uses MPS (RTF 1.05) because diffusion models like F5 are uniform-tensor-op-heavy and MPS coverage is good for those. The Apple Silicon device-pick heuristic is now: **per-backend benchmark, don't extrapolate from "model size + unified memory."** Codebase op coverage matters more than model architecture.
+
+**Generalizable rule.** **Device picks are codebase-dependent, not just model-dependent.** Two ~1-2 GB PyTorch models on the same Apple Silicon hardware can have inverse MPS/CPU performance just because their library implementations have different op-coverage profiles. Always bench both before defaulting.
+
+**Refs.** `src/voice_forge/backends/xtts.py` (CPU default + docstring), [F5 resource profile LEARNING](#f5-tts-on-apple-silicon--rtf-105-with-default-nfe_step32-ram-comparable-to-kokoro-no-30-second-cliff) (MPS works for F5), `docs/BACKENDS.md` XTTS section.
+
+---
+
 ### F5-TTS on Apple Silicon — RTF ~1.05 with default `nfe_step=32`, RAM comparable to Kokoro, no 30-second cliff
 
 **Context.** Adding F5-TTS (`SWivid/F5-TTS`, MIT wrapper, Apache-2 model weights) as the cloning-capable backend candidate to replace NeuTTS, after NeuTTS's documented 30s-narrative cliff and reproducible heid-research short-utterance collapse made it clear we needed a better cloning path.

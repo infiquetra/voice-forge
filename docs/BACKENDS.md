@@ -10,11 +10,16 @@ For the abstraction itself — the `TTSBackend` Protocol, the `VoiceRef` union d
 
 ## At a glance — what ships in v0.2
 
-| Backend | License | Voice paradigm | Cold load | Resident RSS | RTF (Apple Silicon M2 Ultra) | Status |
-|---|---|---|---|---|---|---|
-| **NeuTTS Air (Q8 GGUF)** | Apache 2.0 | Ref-WAV cloning (3-15s reference) | ~26 s | ~5.6 GB | 0.80 (CPU+Accelerate) | shipped v0.1 |
-| **Kokoro 82M** | Apache 2.0 | Preset voice (~54 bundled embeddings) | ~3.6 s | ~1.4 GB | 0.07 (~14× realtime, CPU) | shipped v0.2 |
-| **F5-TTS** | MIT wrapper / Apache-2 model | Ref-WAV cloning (diffusion-based) | ~37 s (incl. 1.5 GB download) | ~1.5 GB | 1.05 (MPS autodetect) | shipped v0.2 |
+| Backend | License (lib / weights) | Voice paradigm | Cloning fidelity (M-Silicon ear-test) | Cold load | Resident RSS | RTF (M2 Ultra) | Status |
+|---|---|---|---|---|---|---|---|
+| **NeuTTS Air (Q8 GGUF)** | Apache-2 / Apache-2 | Ref-WAV cloning | **Identity-preserving** (production baseline) | ~26 s | ~5.6 GB | 0.80 (CPU) | shipped v0.1 |
+| **Kokoro 82M** | Apache-2 / Apache-2 | Preset (~54 embeddings) | N/A (no cloning) | ~3.6 s | ~1.4 GB | 0.07 (CPU) | shipped v0.2 |
+| **F5-TTS** | MIT / Apache-2 | Ref-WAV cloning (diffusion) | **Identity-preserving** (Saga + Hnoss held; Heid drifted) | ~37 s (+1.5 GB DL) | ~1.5 GB | 1.05 (MPS) | shipped v0.2 |
+| **XTTS-v2** | MPL-2 / **CPML (non-commercial)** | Ref-WAV cloning + multilingual | **Pitch/gender only** — no accent preservation | ~51 s (+1.8 GB DL) | ~2.0 GB | 1.57 (CPU; MPS 5× slower) | shipped v0.2 |
+
+**Read the cloning-fidelity column.** "Voice cloning" is a spectrum, not a binary. Three of these backends accept a ref WAV; only NeuTTS + F5 preserve speaker identity in the audible-to-an-ear-test sense. XTTS-v2 produces clean audio that adapts pitch + gender to the ref but loses accent and persona character — see [LEARNINGS § Cloning fidelity is a spectrum](engineering-journal/LEARNINGS.md#cloning-fidelity-is-a-spectrum-not-a-binary--xtts-v2-produces-clean-audio-with-zero-accent-preservation).
+
+**Read the license column carefully.** Library and model-weights licenses are independent. XTTS-v2's library wrapper is MPL-2 (safe to depend on) but its model weights are CPML — **non-commercial unless you've purchased a commercial license from Coqui**. voice-forge can't accept the CPML on the user's behalf; `XTTSBackend.load()` requires `COQUI_TOS_AGREED=1` in the env. See [LEARNINGS § XTTS-v2 license is split](engineering-journal/LEARNINGS.md#xtts-v2-license-is-split--coqui-tts-library-is-mpl-2-but-the-model-weights-are-cpml-non-commercial).
 
 NeuTTS + Kokoro run pure-CPU on Apple Silicon (and for NeuTTS Q8, MPS is actually *slower* — see [LEARNINGS § "Q4/Q8/BF16 × CPU/MPS"](engineering-journal/LEARNINGS.md#q4--q8--bf16--cpu--mps-on-apple-m-series--q4cpuaccelerate-is-fastest-bf16-is-4x-slower)). F5 picks MPS by default on Apple Silicon and benefits — diffusion models are large enough that GPU kernel-launch overhead amortizes.
 
@@ -142,6 +147,39 @@ voice-forge voice add saga-f5 /path/to/saga-ref.wav --ref-text "matching transcr
 ```
 
 Same workflow as NeuTTS — the only difference is `--backend f5`.
+
+## XTTS-v2 (Coqui idiap fork)
+
+- **Library license:** MPL-2.0 (via [`coqui-tts`](https://github.com/idiap/coqui-ai-TTS), the actively-maintained idiap fork of the discontinued upstream Coqui)
+- **Model weights license:** [**CPML — non-commercial only**](https://coqui.ai/cpml) unless commercially-licensed via Coqui (licensing@coqui.ai)
+- **PyPI:** `coqui-tts>=0.27,<0.30` + `transformers<5` (pin reason: coqui-tts uses `transformers.pytorch_utils.isin_mps_friendly` which was removed in v5)
+- **Default model:** `tts_models/multilingual/multi-dataset/xtts_v2` (~1.8 GB on disk after first HF download)
+- **Inference engine:** PyTorch (Apple Silicon: stay on **CPU**, see device note below)
+- **Voice paradigm:** Ref-WAV cloning + multilingual (17 languages). **Does NOT need `ref_text`** — XTTS encodes the speaker WAV directly. Language code is required and pulled from `voice.metadata["language"]` (defaults to `"en"`).
+- **Sample rate:** 24 kHz mono float32 PCM
+- **Streaming:** No native streaming via the `TTS.api.TTS.tts()` surface; `synthesize_stream` degrades to one chunk.
+
+### XTTS-v2 quirks worth knowing
+
+- **License preflight required.** `XTTSBackend.load()` checks for `COQUI_TOS_AGREED=1` in the environment and refuses to load without it. The CPML is non-commercial unless you've paid Coqui. **voice-forge does not auto-accept** — you have to set the env var yourself after reading the CPML. Failure mode is a clear `RuntimeError` with the URL + commercial-licensing contact, not a stdin prompt.
+- **Cloning is pitch + gender, NOT accent.** Empirically on the Asgard sister refs (American English, distinct individual character): XTTS produces clean audio that lands in the right gender + broad pitch range but loses each sister's accent and timbre. NeuTTS and F5 preserve identity; XTTS doesn't. Use it where "any clean voice" is enough, not for persona TTS.
+- **MPS is 5× SLOWER than CPU on Apple Silicon.** Coqui's codebase has documented patchy MPS support — many ops fall back to CPU mid-graph and the per-op marshalling kills any GPU benefit. Default `device=None` → CPU is correct on M-series; don't override to `"mps"` until upstream coqui-tts ships better op coverage.
+- **Library and model versions can have transformers conflicts.** `coqui-tts==0.27.5` calls `transformers.pytorch_utils.isin_mps_friendly`, an API removed in transformers v5. The `[xtts]` extra explicitly pins `transformers<5`. When you upgrade `coqui-tts`, check if the upper bound is still needed.
+
+### Adding an XTTS voice
+
+```bash
+# One-time consent (the model weights are CPML; you have to accept):
+export COQUI_TOS_AGREED=1
+
+# Register a voice (XTTS doesn't use ref_text but the registry tolerates it):
+voice-forge voice add saga-xtts /path/to/saga-ref.wav --ref-text "any text" --backend xtts
+
+# Or skip the transcript entirely:
+voice-forge voice add saga-xtts /path/to/saga-ref.wav --ref-text "ignored by xtts" --backend xtts
+```
+
+(`voice add` will Whisper-transcribe if `--ref-text` is omitted; XTTS doesn't care what the transcript says but the registry expects a `ref.txt` so it's recorded anyway for compatibility with other backends.)
 
 ## Backends queued for future versions
 

@@ -41,7 +41,7 @@
 **Goal:** Add the heavier-but-higher-quality backends + long-form options.
 
 - [x] **F5-TTS backend** (MIT wrapper / Apache-2 model, diffusion-based, voice cloning — pulled forward into v0.2 to test the pluggable abstraction with a third paradigm; no 30s cliff)
-- [ ] **XTTS-v2 backend** (Coqui, MPL-2, multilingual + voice cloning)
+- [x] **XTTS-v2 backend** (MPL-2 lib / CPML weights, multilingual + voice cloning — pulled forward into v0.2; identity-cloning verdict: pitch/gender adapter only, not accent-preserving)
 - [ ] **Dia backend** (first community wrapper; multi-speaker via [S1]/[S2] tags; needs Apple Silicon MPS validation)
 - [ ] **VibeVoice backend** (if licensing checks out — directly addresses long-form narrative quality)
 - [ ] **Piper backend** (subprocess-call wrapper; GPL-3 safe; 30+ languages)
