@@ -269,15 +269,25 @@ Ideal end state: when you audition a sister and it sounds wrong, you tweak her m
 
 ---
 
-## P3 — OpenAI-API-compatible authentication (Bearer / api_key)
+## P3 — OpenAI-API-compatible authentication (Bearer / api_key) — pending a token-issuance story
 
-**Priority.** P3 — required when we expose voice-forge externally.
+**Priority.** P3 — implementation is the easy part; figuring out where tokens come from is the gating decision.
 
-**Effort.** ~2-3 hours.
+**Effort.** Auth wiring itself: ~½ day (REST + WS first-frame token + tests + docs). Token-issuance story: separate decision, unbounded.
 
-**Worth it when.** Multi-tenant / network-exposed deployment needs.
+**Worth it when.** Multi-tenant / network-exposed deployment needs — combined with answering the issuance question.
 
-**Context.** v0 is localhost-only. When we deploy to a network-accessible host, need bearer-token auth at minimum. Plan: support both `Authorization: Bearer <token>` and OpenAI-SDK's `api_key` header.
+**Context.** Considered for v0.3 (2026-05-25) and explicitly deferred. The auth-implementation problem is straightforward — FastAPI dependency for REST, first-frame token field for WS, env-or-file token store. What's missing is the surrounding story:
+
+- **Where do tokens come from?** Issuance: hand-generated UUIDs? Per-user via a CLI command? OAuth flow against some IdP?
+- **Who issues them?** voice-forge itself, or an external identity service?
+- **What does a token bind to?** A person, an agent, a voice subset, an org?
+- **Rotation?** Manual, time-based, on-event?
+- **Revocation?** Pull from store, broadcast invalidation?
+
+Until that decision is made, shipping the auth surface is half a feature — it would force users to invent tokens out of thin air. v0.3 ships localhost-only. Revisit when (a) we have a real network-exposure case AND (b) someone has thought through the issuance story for the deployment context.
+
+Plan when re-engaging: support both `Authorization: Bearer <token>` and OpenAI-SDK's `api_key` header. WS auth via first-frame token field. Token store is FS-backed file `~/.voice-forge/auth.txt` or env var `VOICE_FORGE_AUTH_TOKENS` (comma-separated).
 
 ---
 
