@@ -32,12 +32,12 @@ jobs:
       - name: Lint with ruff
         run: |
           source .venv/bin/activate
-          ruff check src tests
+          ruff check src tests scripts
 
       - name: Format check with black
         run: |
           source .venv/bin/activate
-          black --check src tests
+          black --check src tests scripts
 
       - name: Type check with mypy
         run: |

@@ -1,0 +1,61 @@
+# GENERATED — do not hand-edit. Re-run scripts/sync_fleet_from_home_lab.py
+# Source: infiquetra/home-lab
+#   ansible/roles/hermes_neutts_daemon/defaults/main.yml :: neutts_daemon_personas
+#
+# To refresh after home-lab adds/removes sisters:
+#   python scripts/sync_fleet_from_home_lab.py --home-lab-path ~/workspace/infiquetra/home-lab
+
+- id: freya
+  display_name: Freya
+  voice_id: freya-pa
+  backend: neutts
+  target_agent: Thor
+  description: Freya — team lead (V3 prompt voice)
+- id: saga
+  display_name: Saga
+  voice_id: saga-comms
+  backend: neutts
+  target_agent: Loki
+  description: Saga — history-keeper, dry-witted
+- id: gersemi
+  display_name: Gersemi
+  voice_id: gersemi-time
+  backend: neutts
+  target_agent: Odin
+  description: Gersemi — calendar / time agent
+- id: hnoss
+  display_name: Hnoss
+  voice_id: hnoss-books
+  backend: neutts
+  target_agent: Heimdall
+  description: Hnoss — knowledge / library agent
+- id: eir
+  display_name: Eir
+  voice_id: eir-wellness
+  backend: neutts
+  target_agent: Tyr
+  description: Eir — wellness / health agent
+- id: beyla
+  display_name: Beyla
+  voice_id: beyla-travel
+  backend: neutts
+  target_agent: Baldur
+  description: Beyla — travel agent
+- id: heid
+  display_name: Heid
+  voice_id: heid-research
+  backend: neutts
+  target_agent: Bragi
+  description: Heid — research agent
+- id: bygul
+  display_name: Bygul
+  voice_id: bygul-procurement
+  backend: neutts
+  target_agent: Vidar
+  description: Bygul — procurement agent
+- id: trjegul
+  display_name: Trjegul
+  voice_id: trjegul-skeptic
+  backend: neutts
+  target_agent: Vali
+  description: Trjegul — skeptic / red-team agent

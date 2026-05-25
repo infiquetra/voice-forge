@@ -1,0 +1,27 @@
+# Audition prompts. Hand-authored. Three prompts per sister, in this exact order.
+#
+# - p1_hear_me: short sanity-check utterance — should sound clean on every sister.
+# - p2_who_are_you: 30-second introduction. NeuTTS sisters WILL show the 30s
+#   coherence cliff here. That's expected, not a regression. Edge-TTS or a
+#   future long-form backend (VibeVoice, F5) would handle this cleanly.
+# - p3_story: free-form narrative referencing the sister's target_agent
+#   (from fleet.yaml). Reviews persona character + cloning quality across
+#   varied text.
+#
+# Template-fill order:
+#   p1_hear_me.template — used verbatim.
+#   p2_who_are_you.template — {response_p2} comes from responses.yaml[sister.id].p2.
+#   p3_story.template — {response_p3} comes from responses.yaml[sister.id].p3.
+#     The story text should naturally reference fleet[sister].target_agent
+#     (e.g. "Once Thor and I were..."). If response is generic, the per-sister
+#     uniqueness is lost but audio still plays.
+
+- id: p1_hear_me
+  template: "Can you hear me?"
+  note: "Sanity-check utterance."
+- id: p2_who_are_you
+  template: "{response_p2}"
+  note: "30-second self-introduction. Audible NeuTTS cliff is expected here."
+- id: p3_story
+  template: "{response_p3}"
+  note: "Free-form narrative referencing target_agent."

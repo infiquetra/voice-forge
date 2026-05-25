@@ -162,18 +162,6 @@
 
 ---
 
-## P3 — PyPI publishing pipeline
-
-**Priority.** P3 — currently install via `pip install git+https://github.com/...`. PyPI makes the install command cleaner.
-
-**Effort.** ~2 hours.
-
-**Worth it when.** v0.1.0 ships AND we want broader adoption.
-
-**Context.** GitHub Action that builds wheel on tag push and uploads to PyPI. Standard pattern.
-
----
-
 ## P3 — Helm chart for Kubernetes deploy
 
 **Priority.** P3 — distributed deployment story.

@@ -9,9 +9,34 @@
 
 ---
 
+## SHIPPED 2026-05-24 — v0.2: Asgard audition harness + PyPI publish workflow
+
+**Commit:** (this commit; latest on the `worktree-v0.2-pluggable-proof` branch)
+**From v0.2 plan §5+§6** — closes "PyPI publishing pipeline" QUEUED P3 + delivers the audio-audition surface user-asked for during planning.
+
+Adds two operator scripts under `scripts/`:
+
+- `sync_fleet_from_home_lab.py` reads `infiquetra/home-lab/ansible/roles/hermes_neutts_daemon/defaults/main.yml :: neutts_daemon_personas` and writes `tests/functional/fleet.yaml` with the 9 Asgard sisters, each assigned a unique male Norse-god `target_agent` (Thor, Loki, Odin, Heimdall, Tyr, Baldur, Bragi, Vidar, Vali). Idempotent; re-run on home-lab inventory changes.
+
+- `asgard_audition.py` starts `voice-forge serve` in the background, POSTs 27 synth requests (9 sisters × 3 prompts), writes WAVs to `tests/functional/output/<run_id>/`, generates an HTML index with `<audio controls>` rows grouped by sister, and SIGTERMs the server on exit. Gracefully handles `(not registered)` and `(no response cached)` rows — partial runs are still reviewable.
+
+Three companion files under `tests/functional/`:
+
+- `prompts.yaml` — 3 hand-authored prompts per sister (p1 sanity check, p2 30-second introduction, p3 free-form story).
+- `responses.yaml` — pre-captured persona responses keyed by sister `id`, each carrying a `captured:` date that surfaces in the HTML index.
+- `README.md` — full review procedure, what to listen for per prompt (including the expected NeuTTS 30-second cliff on p2), and the refresh procedure for `responses.yaml`.
+
+Adds `.github/workflows/publish.yml` — tag-triggered OIDC trusted publishing. Tags matching `v*.*.*` build wheel + sdist with `python -m build`; release tags (no `-rc.* / -alpha.* / -beta.*` suffix) go to PyPI's `voice-forge-tts` project; pre-release tags route to TestPyPI for dry runs. **One-time manual setup before first tag push:** create a Pending Publisher on pypi.org and (optionally) test.pypi.org per the procedure in `docs/RELEASING.md`.
+
+CI matrix and gates updated: `ruff` and `black --check` now cover `src tests scripts` (was `src tests`); `mypy src` still no-error-tolerated; pytest unchanged.
+
+**Verification.** `voice-forge --version` reports `0.2.0` from the wheel; `scripts/sync_fleet_from_home_lab.py --home-lab-path ~/workspace/infiquetra/home-lab` produces a 9-sister fleet.yaml with unique targets; `scripts/asgard_audition.py --help` works; tests 68 passed / 4 skipped; ruff + black + mypy clean.
+
+---
+
 ## SHIPPED 2026-05-24 — v0.2: Kokoro backend (validates preset_id arm of VoiceRef)
 
-**Commit:** `<PR-3 commit, filled in post-merge>`
+**Commit:** `679e23b`
 **From QUEUED P2:** "Kokoro backend (validates preset_id arm of VoiceRef)"
 
 Adds `src/voice_forge/backends/kokoro.py` wrapping `hexgrad/kokoro==0.9.4` (Apache-2, PyTorch). Validates the `preset_id` arm of `VoiceRef`: NeuTTS uses `(encoded_codes, ref_text)`, Kokoro uses a string voice name passed through to `KPipeline(text, voice=name)`. The dispatch refactor from PR 2 carries it — `voice-forge synth kokoro-bella "Hello."` works without any code path being aware of "kokoro" specifically.
@@ -24,7 +49,7 @@ Adds `tests/_stubs/fake_kokorolib.py` + `tests/unit/test_kokoro_backend.py` (12 
 
 ## SHIPPED 2026-05-24 — v0.2: Voice-mixing syntax parser (`name(weight)+name(weight)`)
 
-**Commit:** `<PR-3 commit, filled in post-merge>`
+**Commit:** `679e23b`
 **From QUEUED P3:** "Voice mixing syntax (`name(weight)+name(weight)`)"
 
 Adds `src/voice_forge/backends/_mixing.py` with `parse_mix()`. Single-voice specs (`af_bella`) and weighted multi-voice mixes (`af_bella(2)+af_sky(1)`) parse to `[(name, weight), ...]`. Empty / malformed input rejected with clear error messages.
@@ -37,7 +62,7 @@ Adds `src/voice_forge/backends/_mixing.py` with `parse_mix()`. Single-voice spec
 
 ## SHIPPED 2026-05-24 — v0.2: Backend dispatch refactor (drops the hard-coded if/else in server.py + cli.py)
 
-**Commit:** `<PR-2 commit, filled in post-merge>`
+**Commit:** `ed0a7ba`
 **No matching QUEUED entry** — this was tail of the "Phase D shipped without exercising the registry" story, surfaced during v0.2 planning.
 
 Adds `_BACKEND_MODULES` (name → import-path map) and `load_backend_module()` to `backends/__init__.py`. `server.py:_ensure_backend` and `cli.py:_load_backend_or_exit` route through the helper; KeyError → 503 (unknown name), ImportError → 503 with install hint (`pip install voice-forge-tts[kokoro]`). The CLI's `health` command iterates `known_backends()` and quietly skips uninstalled ones so a partial install (e.g. `[neutts]` only) still reports usable state.
@@ -50,7 +75,7 @@ Adds `_BACKEND_MODULES` (name → import-path map) and `load_backend_module()` t
 
 ## SHIPPED 2026-05-24 — v0.2: NeuTTS backend body test coverage (~70% of neutts.py)
 
-**Commit:** `<PR-2 commit, filled in post-merge>`
+**Commit:** `ed0a7ba`
 **Driven by:** PR 2 cleanup — couldn't refactor dispatch confidently with 0% coverage on the only existing backend.
 
 Adds `tests/_stubs/fake_neuttslib.py` (Fake `neutts.NeuTTS` + `llama_cpp.Llama` injected via `sys.modules.setitem`) + `tests/unit/test_neutts_backend.py` (12 tests). Covers `load()`, `health()`, `encode_reference()`, `synthesize()`, `synthesize_stream()`, all three `_resolve_ref` branches, and the not-loaded RuntimeError paths.
@@ -61,7 +86,7 @@ Adds `tests/_stubs/fake_neuttslib.py` (Fake `neutts.NeuTTS` + `llama_cpp.Llama` 
 
 ## SHIPPED 2026-05-24 — v0.2: mypy strict (no continue-on-error in CI)
 
-**Commit:** `<PR-2 commit, filled in post-merge>`
+**Commit:** `ed0a7ba`
 **Driven by:** PR 2 cleanup — the v0 CI loosened mypy with `continue-on-error: true` while implementation landed.
 
 Removes the `continue-on-error: true` flag from the mypy step in `.github/workflows/ci.yml`. Adds a mypy override section in `pyproject.toml` for the optional-dep libraries that don't ship type stubs (`neutts`, `llama_cpp`, `faster_whisper`, `kokoro`); fixes a `tuple[list, str]` narrowing in `neutts.py:_resolve_ref` (`encode_reference()` returns `list | None` per Protocol but NeuTTS's impl always returns a list — `assert codes is not None`).
