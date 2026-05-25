@@ -130,7 +130,10 @@ class FromElevenLabsRequest(BaseModel):
     voice_id: str
     elevenlabs_voice_id: str
     elevenlabs_api_key: str | None = None
-    backend: str = "neutts"
+    # F5 is the default per DECISIONS 2026-05-25 — only identity-preserving
+    # backend that holds coherence past 30 s. Override per-call for NeuTTS
+    # or others.
+    backend: str = "f5"
     max_seconds: float = 14.0
     auto_trim: bool = True
     language: str = "en"
@@ -322,7 +325,7 @@ async def register_voice(
     voice_id: str,
     ref_audio: UploadFile = File(...),  # noqa: B008,
     ref_text: str | None = Form(default=None),
-    backend: str = Form(default="neutts"),
+    backend: str = Form(default="f5"),
     language: str = Form(default="en"),
     description: str = Form(default=""),
     overwrite: bool = Form(default=False),

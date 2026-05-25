@@ -10,12 +10,14 @@ For the abstraction itself — the `TTSBackend` Protocol, the `VoiceRef` union d
 
 ## At a glance — what ships in v0.2
 
+**F5-TTS is the default backend** as of [DECISIONS 2026-05-25](engineering-journal/DECISIONS.md). `nfe_step=32` is the quality preset (batch); `nfe_step=16` is the streaming preset — audibly indistinguishable on the 11-sentence stress test ([LEARNINGS](engineering-journal/LEARNINGS.md)).
+
 | Backend | License (lib / weights) | Voice paradigm | Cloning fidelity (M-Silicon ear-test) | Cold load | Resident RSS | RTF (M2 Ultra) | Status |
 |---|---|---|---|---|---|---|---|
-| **NeuTTS Air (Q8 GGUF)** | Apache-2 / Apache-2 | Ref-WAV cloning (autoregressive) | **Identity-preserving** (production baseline) | ~26 s | ~5.6 GB | 0.80 (CPU) | shipped v0.1 |
-| **Kokoro 82M** | Apache-2 / Apache-2 | Preset (~54 embeddings) | N/A (no cloning) | ~3.6 s | ~1.4 GB | 0.07 (CPU) | shipped v0.2 |
-| **F5-TTS** | MIT / Apache-2 | Ref-WAV cloning (diffusion) | **Identity-preserving** (Saga + Hnoss held; Heid drifted) | ~37 s (+1.5 GB DL) | ~1.5 GB | 1.05 (MPS) | shipped v0.2 |
-| **XTTS-v2** | MPL-2 / **CPML (non-commercial)** | Ref-WAV cloning + multilingual | **Pitch/gender only** — no accent preservation | ~51 s (+1.8 GB DL) | ~2.0 GB | 1.57 (CPU; MPS 5× slower) | shipped v0.2 |
+| **F5-TTS** ⭐ default | MIT / Apache-2 | Ref-WAV cloning (diffusion) | **Identity-preserving** (Saga + Hnoss + Heid all held with `nfe_step=16`) | ~37 s (+1.5 GB DL) | ~1.5 GB | 1.05 (MPS, nfe_step=32) / ~0.5 (nfe_step=16) | shipped v0.2 — **default** |
+| **Kokoro 82M** | Apache-2 / Apache-2 | Preset (~54 embeddings) | N/A (no cloning) | ~3.6 s | ~1.4 GB | 0.07 (CPU) | shipped v0.2 — preset-voice fallback |
+| **NeuTTS Air (Q8 GGUF)** | Apache-2 / Apache-2 | Ref-WAV cloning (autoregressive) | **Identity-preserving** (short utterances only — 30 s cliff) | ~26 s | ~5.6 GB | 0.80 (CPU) | shipped v0.1 — kept for short-form cloning |
+| **XTTS-v2** | MPL-2 / **CPML (non-commercial)** | Ref-WAV cloning + multilingual | **Pitch/gender only** — no accent preservation | ~51 s (+1.8 GB DL) | ~2.0 GB | 1.57 (CPU; MPS 5× slower) | shipped v0.2 — license-gated |
 | **Dia-1.6B** | Apache-2 / Apache-2 | Ref-WAV cloning + multi-speaker tags ([S1]/[S2]) | **Mixed — Heid wrong-gender; default cap truncates long-form to ~18-21s** | ~120 s (+3 GB DL) | ~3 GB est | ~3-5 (MPS, 1.6B params) | shipped v0.2 (with caveats) |
 
 **Read the cloning-fidelity column.** "Voice cloning" is a spectrum, not a binary. Three of these backends accept a ref WAV; only NeuTTS + F5 preserve speaker identity in the audible-to-an-ear-test sense. XTTS-v2 produces clean audio that adapts pitch + gender to the ref but loses accent and persona character — see [LEARNINGS § Cloning fidelity is a spectrum](engineering-journal/LEARNINGS.md#cloning-fidelity-is-a-spectrum-not-a-binary--xtts-v2-produces-clean-audio-with-zero-accent-preservation).

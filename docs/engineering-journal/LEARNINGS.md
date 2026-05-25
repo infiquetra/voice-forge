@@ -27,6 +27,37 @@
 
 ## 2026-05-25
 
+### F5 nfe_step=16 is audibly equivalent to 32 on long-form narrative (on Mac Studio)
+
+**Context.** F5-TTS is a diffusion model: each synth pass runs N denoising steps over the entire sentence's mel-spectrogram, and each step is one model forward pass. `nfe_step` ("number of function evaluations") is the knob. Upstream default is 32 — picked for batch-quality use. The streaming use case wants every saved millisecond of first-audio latency; halving the steps roughly halves synth wall-time. The open question was *whether* halving costs perceptible quality.
+
+**Evidence.** A/B in the live WS demo (`GET /demo`) against the running voice-forge server with the dev-host audition registry, 2026-05-25:
+
+- `saga-comms-f5` (nfe_step=32, default) vs `saga-comms-f5-fast` (nfe_step=16, same ref WAV + transcript)
+- Stress text: Saga's full p3 narrative — 998 chars, 11 sentences, ~60-90s of synthesized audio
+- Listener: human (the user) on a VPN'd browser into the Mac Studio host
+- Outcome: *"held just as good as 32. I couldn't tell the difference whatsoever."*
+
+Wall-clock effect, same prompt:
+- 32-step first audio ≈ 5-6 s; total wall ≈ 60-90 s for the 11-sentence narrative
+- 16-step first audio ≈ 2.5-3 s; total wall ≈ 30-45 s
+
+Quality across the 11-sentence sequence held — the concern with aggressive step counts is *diffusion artifacts compounding* on later sentences (each is a fresh sample from random noise, so degradation would manifest as the listener got further in). The listener reported no degradation through sentence 11.
+
+**Mechanism.** Each diffusion step is a full forward pass through F5's transformer. Quality is monotonically-non-decreasing in step count, but the marginal improvement falls off fast — most of the perceptual quality is locked in by step 16-20 on F5's v1 base model. Steps 20-32 buy fine-grain crispness on transients (sharp consonants, breath sounds, sibilants) that's audibly subtle in the casual-listening case. For the streaming use case where the listener is hearing the audio while the LLM is still generating the next sentence, the marginal crispness loss is doubly invisible.
+
+**Fix.** F5 is now the **default backend** (see [DECISIONS 2026-05-25](DECISIONS.md)); `nfe_step=32` is the **quality preset** (batch synth), `nfe_step=16` is the **streaming preset** (HTTP layer-1 + WS layer-2). The per-voice `metadata.sampling.nfe_step` override (wired in commit `a2e045e`) is the surface for picking which preset a voice gets.
+
+**Validation.** Live audition rerun with `saga-comms-f5-fast` + `heid-research-f5-fast` + `hnoss-books-f5-fast` (all cloned from their 32-step originals with `nfe_step=16`). All three held quality through 11 sentences in the live demo. The user's verdict was unprompted — they noticed the speed first ("first audio should land at ~half the time" was the prediction; it did), and *then* listened critically for quality drop and didn't find one.
+
+**What surprised.** The default value (32) in F5's upstream README turned out to be calibrated for *batch quality benchmarks*, not for streaming use cases. Halving it cost no perceptible quality on real prose. Upstream defaults are tuned for the benchmark; user-facing defaults should be tuned for the use case.
+
+**Generalizable rule.** When a diffusion-based backend exposes a step-count knob, the upstream default is almost always tuned for benchmark scores — not for the cadence the audio is consumed at. Probe the actual quality-vs-latency curve at half- and quarter-step counts before locking in defaults. The compute/quality knee is rarely where the README puts it.
+
+**Refs.** Commit `44d8518` (preload long-story default + voice-picker sampling labels). Voice clones at `.audition-registry/{saga,heid,hnoss}-research-f5-fast/`. [DECISIONS 2026-05-25 § F5 default backend](DECISIONS.md). Linked tasks: #22 (this experiment — closed), #21 (WS pipelining — additional win on top), #20 (F5 accent retention tuning).
+
+---
+
 ### Sentence-chunked synthesize_stream gives 10× first-audio win on F5 long-form
 
 **Context.** F5-TTS's public API is `infer(ref_file, ref_text, gen_text)` which returns the *complete* waveform; the library exposes no per-token / per-chunk streaming hook. The v0.1 `synthesize_stream` for F5 was batch-with-extra-steps — it just ran `infer()` once and yielded the whole result, so streaming clients got no latency benefit over batch.
