@@ -29,7 +29,10 @@ class FakeWSBackend:
     KNOWN_TUNABLES: dict = {}
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        # Each tuple is (voice_id, text, sampling_snapshot). Lets tests assert
+        # both routing (which sentence to which voice) AND that request-scope
+        # sampling overrides flowed through to the backend.
+        self.calls: list[tuple[str, str, dict]] = []
 
     def load(self, config: dict) -> None:  # pragma: no cover — not exercised
         pass
@@ -38,7 +41,8 @@ class FakeWSBackend:
         return None
 
     def synthesize(self, text: str, ref: Any) -> np.ndarray:
-        self.calls.append((ref.voice_id, text))
+        sampling = dict(ref.metadata.get("sampling") or {})
+        self.calls.append((ref.voice_id, text, sampling))
         # 0.5 s silence at 24 kHz, float32
         return np.zeros(12_000, dtype=np.float32)
 
@@ -113,7 +117,7 @@ def test_ws_basic_single_sentence_round_trip(ws_setup):
         events, audio = _collect_until_complete(ws)
 
     # One synth call for one sentence.
-    assert fake.calls == [("fake-voice", "Hello world.")]
+    assert fake.calls == [("fake-voice", "Hello world.", {})]
     # Events: sentence_start, sentence_done, complete (and there's exactly one bin frame).
     starts = [e for e in events if e["event"] == "sentence_start"]
     dones = [e for e in events if e["event"] == "sentence_done"]
@@ -260,6 +264,36 @@ def test_ws_text_only_whitespace_is_dropped(ws_setup):
     # Only the one real sentence was synthesized.
     assert [c[1] for c in fake.calls] == ["One sentence."]
     assert [e for e in events if e["event"] == "complete"][0]["sentences_total"] == 1
+
+
+def test_ws_init_frame_sampling_overrides_flow_through_to_backend(ws_setup):
+    """Init-frame sampling override is merged into voice metadata for synth."""
+    client, fake = ws_setup
+    from voice_forge.registry import Registry
+
+    # Set a per-voice sampling baseline first (writes through to metadata.json).
+    reg = Registry()
+    reg.tune("fake-voice", sampling_overrides={"speed": 1.0})
+    # Open WS with a request-scope override that should win
+    with client.websocket_connect("/v1/tts/stream") as ws:
+        ws.send_json({"voice": "fake-voice", "sampling": {"speed": 1.5, "nfe_step": 16}})
+        ws.receive_json()  # session
+        ws.send_json({"text": "Hello.", "end": True})
+        # Drain to completion
+        _events, _audio = _collect_until_complete(ws)
+    # FakeBackend records ref objects on each call. The synth call should see
+    # the merged metadata — speed overridden to 1.5 (request), plus nfe_step=16
+    # added (request-only).
+    # FakeBackend's calls now include a sampling snapshot — the request-scope
+    # overrides should be merged into voice_ref.metadata for the synth call.
+    last_sampling = fake.calls[-1][2]
+    assert last_sampling.get("speed") == 1.5  # request override wins over registry
+    assert last_sampling.get("nfe_step") == 16  # request-only key added
+
+    # Registry is untouched — request-scope override is per-session, not persisted.
+    reg_again = Registry().get("fake-voice")
+    assert reg_again.metadata.get("sampling", {}).get("speed") == 1.0
+    assert "nfe_step" not in reg_again.metadata.get("sampling", {})
 
 
 def test_list_backends_returns_known_set_with_tunable_schemas(ws_setup):

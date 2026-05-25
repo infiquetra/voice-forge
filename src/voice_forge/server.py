@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 import wave
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -542,6 +543,20 @@ async def ws_tts_stream(ws: WebSocket) -> None:
         await ws.send_json({"event": "error", "detail": f"voice {voice_id!r} not in registry"})
         await ws.close(code=1008)
         return
+
+    # Optional request-scope sampling overrides on the init frame:
+    #   {"voice": "saga", "sampling": {"nfe_step": 16, "cfg_strength": 2.5}}
+    # The demo page sends this when the user has edited knob inputs. Clone the
+    # voice_ref + merge so the registry's cached metadata isn't mutated by one
+    # session's overrides.
+    init_sampling = init.get("sampling") if isinstance(init, dict) else None
+    if isinstance(init_sampling, dict) and init_sampling:
+        merged_metadata = dict(voice_ref.metadata)
+        merged_sampling = dict(merged_metadata.get("sampling") or {})
+        merged_sampling.update(init_sampling)
+        merged_metadata["sampling"] = merged_sampling
+        voice_ref = replace(voice_ref, metadata=merged_metadata)
+
     try:
         backend = _ensure_backend(voice_ref.backend, voice_ref.metadata)
     except HTTPException as exc:

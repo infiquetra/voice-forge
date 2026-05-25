@@ -6,13 +6,13 @@
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-         max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }
+         max-width: 1000px; margin: 2em auto; padding: 0 1em; color: #222; }
   h1 { border-bottom: 2px solid #ccc; padding-bottom: 0.3em; margin-bottom: 0.2em; }
   .sub { color: #666; font-size: 0.9em; margin-bottom: 1.5em; }
   .controls { display: grid; grid-template-columns: max-content 1fr; gap: 0.6em 0.8em;
               align-items: center; margin: 1em 0; }
   label { font-weight: 600; }
-  select, textarea, button, input[type=number] {
+  select, textarea, button, input[type=number], input[type=text] {
     font-family: inherit; font-size: inherit; padding: 0.4em 0.6em;
     border: 1px solid #bbb; border-radius: 4px;
   }
@@ -21,7 +21,20 @@
            padding: 0.6em 1.4em; font-weight: 600; }
   button:hover:not(:disabled) { background: #1a4690; }
   button:disabled { background: #aaa; cursor: not-allowed; }
+  button.secondary { background: #888; }
+  button.secondary:hover:not(:disabled) { background: #666; }
   .row { display: flex; gap: 1em; align-items: center; margin: 1em 0; }
+  .knob-panel { background: #fafafa; border: 1px solid #ddd; border-radius: 4px;
+                padding: 0.8em 1em; margin: 0.6em 0; }
+  .knob-panel h3 { margin: 0 0 0.6em 0; font-size: 0.95em; color: #555;
+                   display: flex; justify-content: space-between; align-items: center; }
+  .knob-panel .empty { color: #999; font-style: italic; font-size: 0.9em; }
+  .knob-row { display: grid; grid-template-columns: 9em max-content 1fr; gap: 0.5em 0.8em;
+              align-items: center; margin: 0.3em 0; font-size: 0.9em; }
+  .knob-row input[type=number] { width: 6em; }
+  .knob-row .knob-desc { color: #777; font-size: 0.85em; }
+  .knob-row .knob-default { color: #999; font-family: ui-monospace, Menlo, monospace;
+                            font-size: 0.85em; }
   .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5em;
              background: #f5f5f5; padding: 0.8em 1em; border-radius: 4px; margin: 1em 0; }
   .metric { font-size: 0.9em; }
@@ -43,20 +56,23 @@
 
 <h1>voice-forge — live streaming demo</h1>
 <p class="sub">
-  Browser opens a WebSocket directly to the server, sends your text in
-  token-sized bursts (simulating an LLM), and plays each sentence's PCM the
-  instant it arrives. The "first audio" stopwatch starts when the WS connects
-  and stops when the first byte of synth comes back.
+  Pick a persona, pick a model, optionally tweak the per-backend knobs,
+  and click Speak. The browser opens a WebSocket directly to this server,
+  streams your text in token-sized bursts, and plays each sentence's PCM
+  the instant it arrives.
 </p>
 
 <div class="controls">
-  <label for="voice">Voice</label>
-  <select id="voice"><option value="">(loading...)</option></select>
+  <label for="persona">Persona</label>
+  <select id="persona"><option value="">(loading...)</option></select>
+
+  <label for="model">Model</label>
+  <select id="model"><option value="">(pick a persona first)</option></select>
 
   <label for="text">Text</label>
   <textarea id="text">I have a favorite memory of Loki, and I have kept it on the highest shelf for years. He had been telling lies all week — small ones, harmless ones, the sort he tells when he is bored and wants to see who is paying attention. I had been quietly recording each one, as I record most things. There was the story about the missing kettle, which had never been missing. There was the one about the supplier in Akureyri, who, when I checked, turned out not to exist at all. There was the elaborate tale of his Tuesday morning, which contradicted his own account from Monday afternoon. When I had compiled thirty-seven of them, I sat down beside him and read them back in order. He listened patiently for nearly twenty minutes. Then he laughed, said I had improved his material, and asked if I would proofread his next round. I told him I would, but only on the condition that he submit them in writing. He has been quieter ever since, which I count as either a victory or a loss, depending on the day.</textarea>
 
-  <label for="trickle">Trickle mode</label>
+  <label for="trickle">Trickle</label>
   <div class="row">
     <label style="font-weight:normal">
       <input type="checkbox" id="trickle" checked>
@@ -64,12 +80,21 @@
       char bursts every <input type="number" id="token-interval" value="40" min="0" max="2000" style="width:5em"> ms
     </label>
   </div>
+</div>
 
-  <span></span>
-  <div class="row">
-    <button id="go">Speak</button>
-    <button id="stop" disabled style="background:#aa3333">Stop</button>
-  </div>
+<div class="knob-panel" id="knob-panel">
+  <h3>
+    <span id="knob-panel-title">Per-voice knobs</span>
+    <button id="reset-knobs" class="secondary" style="font-size:0.8em; padding: 0.2em 0.8em;">
+      Reset to voice defaults
+    </button>
+  </h3>
+  <div id="knob-rows"><div class="empty">pick a model to see its tunables</div></div>
+</div>
+
+<div class="row" style="justify-content:flex-end">
+  <button id="go">Speak</button>
+  <button id="stop" disabled style="background:#aa3333">Stop</button>
 </div>
 
 <div class="metrics">
@@ -92,40 +117,53 @@
 <details>
   <summary>What's actually happening</summary>
   <p style="font-size:0.9em;line-height:1.5;">
-    This page opens a <code>WebSocket</code> to
-    <code>ws://&lt;same-host&gt;/v1/tts/stream</code>. The first frame is
-    <code>{"voice": "&lt;id&gt;"}</code>; the server replies with a session
-    JSON describing the audio format (24 kHz mono float32-LE PCM).
+    On page load this page fetches <code>/v1/audio/voices</code> (the persona +
+    voice catalog) and <code>/v1/backends</code> (the per-backend tunable
+    schemas). The two dropdowns are derived from those: the Persona dropdown
+    is a deduplicated set of human personas, and the Model dropdown is filtered
+    to the backends that actually have a voice registered for the selected
+    persona. The knob panel renders only the inputs that the selected
+    backend's <code>KNOWN_TUNABLES</code> declares — pick Kokoro and you'll
+    see one knob (speed); pick F5 and you'll see six.
   </p>
   <p style="font-size:0.9em;line-height:1.5;">
-    Then the page either sends your text all at once (trickle off) or chops
-    it into N-char chunks with M ms gaps (trickle on). The server's
+    On Speak, the page opens a <code>WebSocket</code> to
+    <code>ws://&lt;same-host&gt;/v1/tts/stream</code> and sends a first frame
+    <code>{"voice": "&lt;id&gt;", "sampling": {...overrides...}}</code>.
+    The server merges the overrides into the voice's metadata <em>for this
+    session only</em> — your edits never persist to the registry. Then the
+    text is trickled in (or sent all at once), the server's
     <code>SentenceBuffer</code> drains complete sentences as they form,
-    runs <code>backend.synthesize()</code> on each, and pushes the float32
-    PCM back as a binary WS frame. The browser appends each frame to a
-    Web Audio scheduling queue so sentences play back-to-back without gaps.
-  </p>
-  <p style="font-size:0.9em;line-height:1.5;">
-    Unlike the static <code>ws-*/index.html</code> audition pages &mdash; those
-    play pre-recorded WAV files captured during a one-time audition run &mdash;
-    this page does the whole stream <strong>live</strong> in your browser, every
-    time you click Speak.
+    runs <code>backend.synthesize()</code> on each, and pushes float32
+    PCM frames back. The browser appends each frame to a Web Audio scheduling
+    queue so sentences play seamlessly back-to-back.
   </p>
 </details>
 
 <script>
 (() => {
-  const voiceSel = document.getElementById('voice');
+  const personaSel = document.getElementById('persona');
+  const modelSel = document.getElementById('model');
   const textArea = document.getElementById('text');
   const trickleCb = document.getElementById('trickle');
   const tokenSizeIn = document.getElementById('token-size');
   const tokenIntervalIn = document.getElementById('token-interval');
   const goBtn = document.getElementById('go');
   const stopBtn = document.getElementById('stop');
+  const knobPanel = document.getElementById('knob-panel');
+  const knobPanelTitle = document.getElementById('knob-panel-title');
+  const knobRows = document.getElementById('knob-rows');
+  const resetKnobsBtn = document.getElementById('reset-knobs');
   const mFirstText = document.getElementById('m-first-text');
   const mFirstAudio = document.getElementById('m-first-audio');
   const mSentences = document.getElementById('m-sentences');
   const logEl = document.getElementById('log');
+
+  // Catalog state — populated on page load
+  let voices = [];          // raw /v1/audio/voices data
+  let backendSchemas = {};  // backend_name → KNOWN_TUNABLES dict
+  // personaMap: persona name → [{voice_id, backend, metadata}, ...]
+  let personaMap = {};
 
   function log(msg, cls) {
     const ts = new Date().toLocaleTimeString('en-US', { hour12: false }) +
@@ -144,56 +182,198 @@
     mSentences.textContent = '0';
   }
 
-  function setVoiceOptions(opts) {
-    // opts: list of {value, text}
-    voiceSel.replaceChildren();
+  function setSelectOptions(sel, opts) {
+    sel.replaceChildren();
     for (const o of opts) {
       const el = document.createElement('option');
       el.value = o.value;
       el.textContent = o.text;
-      voiceSel.appendChild(el);
+      sel.appendChild(el);
     }
   }
 
-  // Populate voice picker from the server's REST endpoint.
-  fetch('/v1/audio/voices')
-    .then(r => r.json())
-    .then(j => {
-      const voices = (j.data || []).slice().sort((a, b) => a.id.localeCompare(b.id));
-      if (voices.length === 0) {
-        setVoiceOptions([{ value: '', text: '(no voices in registry)' }]);
-      } else {
-        setVoiceOptions(voices.map(v => {
-          // Surface sampling overrides in the label so e.g.
-          //   saga-comms-f5         → "saga-comms-f5 · f5"
-          //   saga-comms-f5-fast    → "saga-comms-f5-fast · f5 · nfe_step=16"
-          // Picking between tuned vs untuned voices is otherwise invisible
-          // from the voice_id alone.
-          const sampling = v.metadata && v.metadata.sampling;
-          const tuneStr = sampling
-            ? Object.entries(sampling).map(([k, val]) => k + '=' + val).join(', ')
-            : '';
-          const text = tuneStr
-            ? v.id + ' · ' + v.backend + ' · ' + tuneStr
-            : v.id + ' · ' + v.backend;
-          return { value: v.id, text: text };
-        }));
-      }
-    })
-    .catch(err => {
-      setVoiceOptions([{ value: '', text: '(failed to load: ' + String(err) + ')' }]);
-    });
+  // Build personaMap from voices array. Each persona maps to its voice rows
+  // (potentially multiple — same persona × different backends).
+  function buildPersonaMap() {
+    personaMap = {};
+    for (const v of voices) {
+      const persona = v.persona || v.id;
+      if (!personaMap[persona]) personaMap[persona] = [];
+      personaMap[persona].push(v);
+    }
+  }
 
+  function populatePersonaDropdown() {
+    const personas = Object.keys(personaMap).sort((a, b) => a.localeCompare(b));
+    if (personas.length === 0) {
+      setSelectOptions(personaSel, [{ value: '', text: '(no voices in registry)' }]);
+      return;
+    }
+    setSelectOptions(personaSel, personas.map(p => ({ value: p, text: p })));
+    onPersonaChange();
+  }
+
+  function onPersonaChange() {
+    const persona = personaSel.value;
+    if (!persona || !personaMap[persona]) {
+      setSelectOptions(modelSel, [{ value: '', text: '(pick a persona first)' }]);
+      renderKnobs(null, null);
+      return;
+    }
+    // Deduplicate by backend. If a persona has multiple voices for the same
+    // backend (e.g. saga-comms-f5 AND saga-comms-f5-fast), prefer the one
+    // whose voice_id has no extra suffix (heuristic: shorter id wins).
+    const byBackend = {};
+    for (const v of personaMap[persona]) {
+      const prev = byBackend[v.backend];
+      if (!prev || v.id.length < prev.id.length) byBackend[v.backend] = v;
+    }
+    const backends = Object.keys(byBackend).sort((a, b) => a.localeCompare(b));
+    setSelectOptions(modelSel, backends.map(b => {
+      const v = byBackend[b];
+      const installed = (backendSchemas[b] && backendSchemas[b].installed) !== false;
+      const label = installed ? b : b + ' (extra not installed)';
+      return { value: v.id, text: label };
+    }));
+    modelSel.dataset.personaBackends = JSON.stringify(byBackend);
+    onModelChange();
+  }
+
+  function getSelectedVoice() {
+    const voiceId = modelSel.value;
+    if (!voiceId) return null;
+    return voices.find(v => v.id === voiceId) || null;
+  }
+
+  function renderKnobs(voice, backend) {
+    knobRows.replaceChildren();
+    if (!voice || !backend) {
+      knobPanelTitle.textContent = 'Per-voice knobs';
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'pick a model to see its tunables';
+      knobRows.appendChild(empty);
+      return;
+    }
+    knobPanelTitle.textContent = 'Per-voice knobs — ' + backend;
+    const schema = (backendSchemas[backend] && backendSchemas[backend].tunables) || {};
+    const tunableNames = Object.keys(schema);
+    if (tunableNames.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = backend + ' has no per-voice tunables (load-time config only)';
+      knobRows.appendChild(empty);
+      return;
+    }
+    const voiceSampling = (voice.metadata && voice.metadata.sampling) || {};
+    for (const name of tunableNames) {
+      const spec = schema[name];
+      const currentValue = name in voiceSampling ? voiceSampling[name] : spec.default;
+      const row = document.createElement('div');
+      row.className = 'knob-row';
+      const lbl = document.createElement('label');
+      lbl.textContent = name;
+      lbl.htmlFor = 'knob-' + name;
+      const input = document.createElement('input');
+      input.id = 'knob-' + name;
+      input.dataset.tunableName = name;
+      input.dataset.tunableType = spec.type;
+      if (spec.type === 'int' || spec.type === 'float') {
+        input.type = 'number';
+        if (spec.min !== undefined) input.min = spec.min;
+        if (spec.max !== undefined) input.max = spec.max;
+        if (spec.type === 'float') input.step = 'any';
+        input.value = currentValue;
+      } else {
+        input.type = 'text';
+        input.value = String(currentValue);
+      }
+      const desc = document.createElement('div');
+      desc.className = 'knob-desc';
+      const defaultStr = (name in voiceSampling)
+        ? '(voice override; default ' + spec.default + ')'
+        : '(default)';
+      desc.textContent = spec.description + ' ' + defaultStr;
+      row.appendChild(lbl);
+      row.appendChild(input);
+      row.appendChild(desc);
+      knobRows.appendChild(row);
+    }
+  }
+
+  function onModelChange() {
+    const voice = getSelectedVoice();
+    if (!voice) {
+      renderKnobs(null, null);
+      return;
+    }
+    renderKnobs(voice, voice.backend);
+  }
+
+  function readKnobOverrides() {
+    // Read every knob input; only emit values that differ from the voice's
+    // current persisted sampling (so request-scope overrides stay minimal).
+    const voice = getSelectedVoice();
+    if (!voice) return {};
+    const voiceSampling = (voice.metadata && voice.metadata.sampling) || {};
+    const backend = voice.backend;
+    const schema = (backendSchemas[backend] && backendSchemas[backend].tunables) || {};
+    const overrides = {};
+    for (const input of knobRows.querySelectorAll('input[data-tunable-name]')) {
+      const name = input.dataset.tunableName;
+      const type = input.dataset.tunableType;
+      let value;
+      if (type === 'int') {
+        value = parseInt(input.value, 10);
+        if (Number.isNaN(value)) continue;
+      } else if (type === 'float') {
+        value = parseFloat(input.value);
+        if (Number.isNaN(value)) continue;
+      } else {
+        value = input.value;
+      }
+      // Only send the override if it actually differs from what's persisted
+      // OR from the spec default when nothing's persisted.
+      const baseline = name in voiceSampling ? voiceSampling[name] : schema[name].default;
+      if (value !== baseline) overrides[name] = value;
+    }
+    return overrides;
+  }
+
+  function resetKnobs() {
+    onModelChange();  // re-render from voice metadata + spec defaults
+  }
+
+  // --- catalog loading ---
+  Promise.all([
+    fetch('/v1/audio/voices').then(r => r.json()),
+    fetch('/v1/backends').then(r => r.json()),
+  ]).then(([vRes, bRes]) => {
+    voices = vRes.data || [];
+    for (const b of (bRes.data || [])) {
+      backendSchemas[b.name] = b;
+    }
+    buildPersonaMap();
+    populatePersonaDropdown();
+  }).catch(err => {
+    setSelectOptions(personaSel, [{ value: '', text: '(catalog load failed: ' + String(err) + ')' }]);
+  });
+
+  personaSel.addEventListener('change', onPersonaChange);
+  modelSel.addEventListener('change', onModelChange);
+  resetKnobsBtn.addEventListener('click', resetKnobs);
+
+  // --- WS streaming ---
   let ws = null;
-  let ac = null;           // AudioContext, created on first Speak (Safari autoplay rule)
-  let nextStartTime = 0;   // Web Audio scheduling cursor
+  let ac = null;
+  let nextStartTime = 0;
   let sentenceCount = 0;
   let connectT0 = 0;
   let firstTextAt = null;
   let firstAudioAt = null;
 
   async function speak() {
-    const voice = voiceSel.value;
+    const voice = getSelectedVoice();
     if (!voice) { log('no voice selected', 'error'); return; }
     const text = textArea.value;
     if (!text.trim()) { log('no text', 'error'); return; }
@@ -207,9 +387,6 @@
     firstAudioAt = null;
     nextStartTime = 0;
 
-    // (Re-)create the AudioContext at 24 kHz so float32 PCM frames don't
-    // need resampling. Safari requires this to be created inside a user
-    // gesture, hence speak() being the trigger.
     if (!ac || ac.state === 'closed') {
       ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
     } else {
@@ -223,9 +400,16 @@
     ws.binaryType = 'arraybuffer';
     connectT0 = performance.now();
 
+    const overrides = readKnobOverrides();
+    const handshake = { voice: voice.id };
+    if (Object.keys(overrides).length > 0) handshake.sampling = overrides;
+
     ws.onopen = () => {
       log('ws open (+' + (performance.now() - connectT0).toFixed(0) + ' ms)', 'event');
-      ws.send(JSON.stringify({ voice }));
+      if (handshake.sampling) {
+        log('sending sampling overrides: ' + JSON.stringify(handshake.sampling), 'event');
+      }
+      ws.send(JSON.stringify(handshake));
     };
 
     ws.onmessage = (ev) => {
@@ -258,7 +442,6 @@
             break;
         }
       } else {
-        // Binary PCM frame — float32 little-endian
         if (firstAudioAt === null) {
           firstAudioAt = performance.now() - connectT0;
           mFirstAudio.textContent = firstAudioAt.toFixed(0) + ' ms';
@@ -269,7 +452,6 @@
         const src = ac.createBufferSource();
         src.buffer = buffer;
         src.connect(ac.destination);
-        // Schedule each frame back-to-back so sentences play seamlessly.
         const startAt = Math.max(ac.currentTime, nextStartTime);
         src.start(startAt);
         nextStartTime = startAt + buffer.duration;
@@ -295,7 +477,6 @@
       mFirstText.textContent = firstTextAt.toFixed(0) + ' ms (sent all at once)';
       return;
     }
-    // Trickle in token-sized bursts.
     for (let i = 0; i < text.length; i += tokenSize) {
       const chunk = text.slice(i, i + tokenSize);
       const isLast = i + tokenSize >= text.length;
