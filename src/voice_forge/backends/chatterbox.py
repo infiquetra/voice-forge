@@ -73,7 +73,9 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
 
         def load(self, config: dict) -> None:
             device = config.get("device") or "auto"
-            self._model = ChatterboxTTS.from_pretrained(device=device)  # nosec B615 — revision pin queued
+            self._model = ChatterboxTTS.from_pretrained(
+                device=device
+            )  # nosec B615 — revision pin queued
             logger.info("chatterbox child loaded (device=%s)", device)
 
         def encode_reference(self, _ref_audio_path: str) -> list | None:

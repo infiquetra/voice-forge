@@ -98,8 +98,7 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
             speaker_id = self._speaker_ids.get(preset)
             if speaker_id is None:
                 raise ValueError(
-                    f"melotts: unknown preset {preset!r}; "
-                    f"available: {list(self._speaker_ids)}"
+                    f"melotts: unknown preset {preset!r}; " f"available: {list(self._speaker_ids)}"
                 )
             sampling = ref.metadata.get("sampling") or {}
             wav = self._model.tts_to_file(
