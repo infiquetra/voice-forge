@@ -27,6 +27,49 @@
 
 ## 2026-05-24
 
+### Kokoro library pick — `kokoro` (Apache-2 / PyTorch) over `kokoro-onnx` (MIT / ONNX), trading Python 3.13 support
+
+**Context.** v0.2 adds a second backend to prove the pluggable abstraction. Two candidate libraries both publish to PyPI under the same model family (Kokoro-82M, Apache-2 weights from `hexgrad/Kokoro-82M`):
+- `kokoro` (PyPI), from `hexgrad/kokoro` — Apache-2 wrapper, PyTorch + transformers + misaki[en]
+- `kokoro-onnx` (PyPI), from `thewh1teagle/kokoro-onnx` — MIT wrapper, onnxruntime, ~10× smaller install
+
+**Evidence.** PyPI metadata pulled 2026-05-24 via `curl https://pypi.org/pypi/{kokoro,kokoro-onnx}/json | jq .info`:
+- `kokoro==0.9.4`: `requires-python: >=3.10,<3.13`, License: Apache 2.0
+- `kokoro-onnx==0.5.0`: `requires-python: >=3.10,<3.14`, License: MIT
+- Upstream `hexgrad/kokoro` `pyproject.toml` HEAD declares `<3.14` but no release has been cut with the relaxed constraint.
+
+**Mechanism.** The published `kokoro==0.9.4` wheel was built against an older pyproject; pip respects the wheel-declared `requires-python` regardless of repo HEAD. Until upstream cuts a release with `<3.14`, installing `kokoro` from PyPI blocks Python 3.13.
+
+**Fix.** Picked `kokoro` for v0.2 (commit `<PR-3 commit>`). License-aligned with voice-forge (Apache-2 to Apache-2); PyTorch backend gets MPS support on Apple Silicon for free; the lib exposes `KPipeline` as a native generator giving us streaming for free. Dropped Python 3.13 from CI matrix (`["3.11", "3.12"]`) and from `pyproject.toml` classifiers. Re-add 3.13 the moment upstream publishes a release with `<3.14`.
+
+**What surprised.** That PyPI-served metadata and upstream-repo-HEAD pyproject can disagree about Python version support for the same version number. The wheel metadata is the authoritative constraint pip uses; the repo HEAD is aspirational until the next release.
+
+**Generalizable rule.** When picking between two libraries that wrap the same model, check the **wheel-declared** `requires-python` from PyPI's JSON API, not the repo's current `pyproject.toml`. The wheel is what pip honors.
+
+**Refs.** `pyproject.toml` (kokoro optional extra + classifier list), `docs/engineering-journal/QUEUED.md` (re-add 3.13 in v0.2.x), `src/voice_forge/backends/kokoro.py` (the implementation).
+
+---
+
+### Kokoro voice-mixing tensor blending — parser ships, consumption deferred
+
+**Context.** Kokoro's README (`hexgrad/kokoro`) shows `voice=` accepts a `torch.Tensor` directly, with an example loading a per-voice `.pt` file via `torch.load('path/to/voice.pt', weights_only=True)`. voice-forge inherits the `name(weight)+name(weight)` mix syntax from Kokoro-FastAPI's prior art, and v0.2 wanted to ship full blending.
+
+**Evidence.** Upstream README at github.com/hexgrad/kokoro and the [PRIOR_ART.md Kokoro-FastAPI section](../PRIOR_ART.md) show the syntax. `KPipeline.voices` / `pipeline.model.voices` / the exact HF-cache file path for per-voice tensors is **not documented** in the upstream README we surveyed.
+
+**Mechanism.** Without upstream guidance on accessing the per-voice embedding tensors via the public API, naively loading them from the HF cache would couple voice-forge to undocumented filesystem layout — brittle.
+
+**Fix (queued).** PR 3 (commit `<PR-3 commit>`) ships:
+- The parser (`src/voice_forge/backends/_mixing.py`), fully tested.
+- `KokoroBackend._resolve_voice` calls the parser; for single-voice specs it passes the bare name; for multi-voice mixes it logs a `voice-mix degradation` warning and picks the highest-weight name as a fallback.
+
+Tensor-blending is queued as a v0.2.x item — once we have a real impl running on the Mac Studio we can probe `pipeline.voices` interactively and either pin the API or file an upstream issue requesting one.
+
+**Generalizable rule.** When a feature has a clean syntax surface but the consumption path is uncertain, **ship the surface anyway** behind a documented degradation. Users get the right CLI / API shape; the implementation upgrade is a non-breaking follow-up.
+
+**Refs.** `src/voice_forge/backends/kokoro.py:_resolve_voice`, `src/voice_forge/backends/_mixing.py`, [PRIOR_ART.md § Kokoro-FastAPI](../PRIOR_ART.md).
+
+---
+
 ### Q4 / Q8 / BF16 × CPU / MPS on Apple M-series — Q4+CPU+Accelerate is fastest, BF16 is 4x slower
 
 **Context.** Pre-investigation assumption was that Metal/MPS would be faster than CPU on Apple Silicon for the NeuTTS model. Initial measurements on a Mac mini M4 Pro (24GB unified memory) disproved this for the ~500MB-1.5GB NeuTTS model class.

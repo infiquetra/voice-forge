@@ -39,9 +39,17 @@ neutts = [
     # NeuTTS-Air backend (CPU/Metal-friendly, instant cloning)
     "neutts[llama]>=1.2",
 ]
+kokoro = [
+    # Kokoro-82M backend (PyTorch + MPS-capable; preset voices)
+    # NOTE: requires `espeak-ng` on the host PATH (brew install espeak-ng).
+    "kokoro>=0.9.4,<1.0",
+]
 voice-lab = [
     # ElevenLabs Voice Lab puller + Whisper ref-trimmer
     "faster-whisper>=1.0",
+]
+all = [
+    "voice-forge-tts[neutts,kokoro,voice-lab]",
 ]
 dev = [
     "pytest>=8.0",
@@ -101,11 +109,11 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 # Third-party packages without py.typed markers / shipped stubs. We don't
 # control them; suppress import-not-found / missing-stub noise.
-# PR 3 (Kokoro backend) will add "kokoro" + "kokoro.*" here.
 module = [
     "neutts",
     "llama_cpp",
     "faster_whisper",
+    "kokoro",
 ]
 ignore_missing_imports = true
 

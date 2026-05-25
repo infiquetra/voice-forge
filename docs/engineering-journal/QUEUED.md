@@ -18,18 +18,6 @@
 
 ---
 
-## P2 — Kokoro backend (validates preset_id arm of VoiceRef)
-
-**Priority.** P2 — first second backend, validates the abstraction.
-
-**Effort.** ~2-3 hours. Kokoro has a well-defined Python API; CPU-friendly; preset voices.
-
-**Worth it when.** v0.1.0 ships + we want to demonstrate the multi-backend story.
-
-**Context.** Kokoro-FastAPI demonstrates the integration pattern in [PRIOR_ART.md](../PRIOR_ART.md). 40+ pre-computed voice packs validate the `preset_id` arm of `VoiceRef`. Apache 2.0.
-
----
-
 ## P2 — Kitten backend (smallest model, ONNX, CPU-only)
 
 **Priority.** P2 — lightweight option for resource-constrained hosts.
@@ -198,15 +186,20 @@
 
 ---
 
-## P3 — Voice mixing syntax (`name(weight)+name(weight)`)
+## P3 — Kokoro voice-mixing tensor blending (full impl of the `name(weight)+name(weight)` syntax)
 
-**Priority.** P3 — quality-of-life for backends that support it (Kokoro).
+**Priority.** P3 — the syntax surface ships in v0.2; only the multi-voice blending degraded to a fallback.
 
-**Effort.** ~2-3 hours.
+**Effort.** ~2-3 hours pending upstream API discovery.
 
-**Worth it when.** Kokoro backend ships AND users want to interpolate voices.
+**Worth it when.** Someone wants to actually interpolate Kokoro voices and the current "highest-weight fallback" isn't enough.
 
-**Context.** Kokoro-FastAPI's syntax (per [PRIOR_ART.md](../PRIOR_ART.md)). Express in `VoiceRef.preset_id` as `"af_bella(2)+af_sky(1)"`; backend interprets.
+**Context.** The parser (`src/voice_forge/backends/_mixing.py`) and the `_resolve_voice` plumbing ship in v0.2. Multi-voice mixes currently log a degradation warning and return the highest-weight voice name. Real blending needs:
+- Discover the upstream `KPipeline` API for accessing per-voice embedding tensors (`pipeline.voices`? `pipeline.model.voices`?), OR pin the HF-cache file-path layout for the per-voice `.pt` files.
+- `torch.load(voice_pt_path, weights_only=True)` each named voice's tensor, weighted-average them.
+- Pass the resulting tensor as `voice=blended_tensor` to `pipeline(...)`.
+
+See [LEARNINGS 2026-05-24 § Kokoro voice-mixing tensor blending](../engineering-journal/LEARNINGS.md).
 
 ---
 
