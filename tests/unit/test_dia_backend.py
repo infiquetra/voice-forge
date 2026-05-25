@@ -130,10 +130,25 @@ def test_synthesize_passes_resampled_audio_to_processor(dia_backend, tiny_ref_wa
     assert 43000 <= len(audio_arg[0]) <= 45000
 
 
-def test_synthesize_stream_degrades_to_single_chunk(dia_backend, tiny_ref_wav):
+def test_synthesize_stream_single_sentence_one_chunk(dia_backend, tiny_ref_wav):
     chunks = list(dia_backend.synthesize_stream("Hello.", _voice_ref(tiny_ref_wav)))
     assert len(chunks) == 1
     assert chunks[0].dtype == np.float32
+
+
+def test_synthesize_stream_multi_sentence_yields_per_chunk(dia_backend, tiny_ref_wav):
+    ref = _voice_ref(tiny_ref_wav)
+    ref.metadata["sampling"] = {"stream_chunk_chars": 15}
+    long = "First sentence here. Second sentence. Third one here."
+    chunks = list(dia_backend.synthesize_stream(long, ref))
+    assert len(chunks) >= 2
+    for c in chunks:
+        assert c.dtype == np.float32
+
+
+def test_synthesize_stream_empty_text_yields_nothing(dia_backend, tiny_ref_wav):
+    chunks = list(dia_backend.synthesize_stream("", _voice_ref(tiny_ref_wav)))
+    assert chunks == []
 
 
 def test_missing_ref_audio_raises(dia_backend, tiny_ref_wav):

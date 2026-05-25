@@ -117,15 +117,31 @@ def _fill_template(template: str, sister_id: str, prompt_id: str, responses: dic
 
 
 def _synthesize(
-    host: str, port: int, voice_id: str, text: str, output_path: Path
-) -> tuple[bool, str]:
-    """POST /v1/audio/speech, write WAV to output_path. Returns (success, message)."""
+    host: str,
+    port: int,
+    voice_id: str,
+    text: str,
+    output_path: Path,
+    stream: bool = False,
+) -> tuple[bool, dict]:
+    """POST /v1/audio/speech, write WAV to output_path.
+
+    Returns (success, info_dict). info_dict has:
+        bytes: total response size
+        total_s: wall-clock from request-send to last byte
+        first_audio_ms: time from request-send to first PCM byte
+                        (after the 44-byte WAV header; only meaningful when stream=true,
+                        but recorded for batch too as a baseline)
+    """
+    import time
+
     body = json.dumps(
         {
             "model": "voice-forge",
             "input": text,
             "voice": voice_id,
             "response_format": "wav",
+            "stream": stream,
         }
     ).encode()
     req = urllib.request.Request(
@@ -134,22 +150,70 @@ def _synthesize(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    info: dict = {"bytes": 0, "total_s": 0.0, "first_audio_ms": 0.0}
+    t0 = time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            audio_bytes = resp.read()
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            chunks: list[bytes] = []
+            running_size = 0
+            first_pcm_seen = False
+            # Standard WAV header is 44 bytes; the server's streaming header
+            # also writes 44 bytes (RIFF + fmt + data). Anything past that
+            # counts as first PCM byte.
+            WAV_HEADER_LEN = 44
+            while True:
+                # 8 KiB reads — small enough to see first-byte arrival quickly
+                buf = resp.read(8192)
+                if not buf:
+                    break
+                chunks.append(buf)
+                running_size += len(buf)
+                if not first_pcm_seen and running_size > WAV_HEADER_LEN:
+                    info["first_audio_ms"] = (time.monotonic() - t0) * 1000
+                    first_pcm_seen = True
+        audio_bytes = b"".join(chunks)
         output_path.write_bytes(audio_bytes)
-        return True, f"{len(audio_bytes):,} bytes"
+        info["bytes"] = len(audio_bytes)
+        info["total_s"] = time.monotonic() - t0
+        return True, info
     except urllib.error.HTTPError as exc:
-        return False, f"HTTP {exc.code}: {exc.read().decode(errors='replace')[:200]}"
+        info["error"] = f"HTTP {exc.code}: {exc.read().decode(errors='replace')[:200]}"
+        return False, info
     except (urllib.error.URLError, TimeoutError) as exc:
-        return False, f"network error: {exc!r}"
+        info["error"] = f"network error: {exc!r}"
+        return False, info
+
+
+def _columns_for_mode(mode: str) -> list[str]:
+    """Map --mode flag to the list of columns rendered + synthesized.
+
+    ``batch``  → one batch column
+    ``stream`` → one stream column
+    ``both``   → batch + stream side-by-side
+    """
+    if mode == "batch":
+        return ["batch"]
+    if mode == "stream":
+        return ["stream"]
+    return ["batch", "stream"]
 
 
 def _render_html(
-    output_dir: Path, fleet: list[dict], prompts: list[dict], responses: dict, results: dict
+    output_dir: Path,
+    fleet: list[dict],
+    prompts: list[dict],
+    responses: dict,
+    results: dict,
+    mode: str = "batch",
 ) -> Path:
-    """Generate an index.html with grouped <audio controls> rows."""
+    """Generate an index.html with grouped <audio controls> rows.
+
+    When ``mode == 'both'``, each row gets two audio columns: batch | stream,
+    so reviewers can A/B compare them directly. Latency stats (first-audio-ms
+    and total-synth-seconds) appear next to each player.
+    """
     title = f"voice-forge audition — {output_dir.name}"
+    columns = _columns_for_mode(mode)
     rows = []
     for sister in fleet:
         captured = responses.get(sister["id"], {}).get("captured", "?")
@@ -160,18 +224,34 @@ def _render_html(
             f"captured={_html.escape(captured)})</small></h2>"
         )
         rows.append("<table>")
+        # Header row when we have both columns
+        if len(columns) > 1:
+            rows.append("<tr><th>prompt</th>")
+            for col in columns:
+                rows.append(f"<th>{_html.escape(col)}</th>")
+            rows.append("<th>note</th></tr>")
         for prompt in prompts:
-            key = (sister["voice_id"], prompt["id"])
-            result = results.get(key, {})
-            status = result.get("status", "?")
-            wav_name = result.get("wav_name")
             note = _html.escape(prompt.get("note", ""))
             rows.append("<tr>")
             rows.append(f'<td class="prompt-id"><code>{_html.escape(prompt["id"])}</code></td>')
-            if wav_name:
-                rows.append(f'<td><audio controls src="{_html.escape(wav_name)}"></audio></td>')
-            else:
-                rows.append(f'<td class="missing">{_html.escape(status)}</td>')
+            for col in columns:
+                key = (sister["voice_id"], prompt["id"], col)
+                result = results.get(key, {})
+                wav_name = result.get("wav_name")
+                if wav_name:
+                    latency = ""
+                    if result.get("first_audio_ms") is not None:
+                        latency = (
+                            f"<br><small>first audio: "
+                            f"{result['first_audio_ms']:.0f} ms · "
+                            f"total: {result['total_s']:.1f} s</small>"
+                        )
+                    rows.append(
+                        f'<td><audio controls src="{_html.escape(wav_name)}"></audio>{latency}</td>'
+                    )
+                else:
+                    status = result.get("status", "?")
+                    rows.append(f'<td class="missing">{_html.escape(status)}</td>')
             rows.append(f'<td class="note">{note}</td>')
             rows.append("</tr>")
         rows.append("</table>")
@@ -228,6 +308,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument(
+        "--mode",
+        choices=("batch", "stream", "both"),
+        default="batch",
+        help=(
+            "Which synth path to exercise. 'batch' (default) hits "
+            "/v1/audio/speech with stream=false; 'stream' uses stream=true; "
+            "'both' does each row twice and renders a side-by-side HTML so "
+            "you can A/B compare audio quality + first-byte latency."
+        ),
+    )
+    parser.add_argument(
         "--skip-server",
         action="store_true",
         help="Don't start/stop a server subprocess; assume one is already running.",
@@ -256,28 +347,54 @@ def main(argv: list[str] | None = None) -> int:
         _wait_for_health(args.host, args.port, HEALTH_TIMEOUT_SEC)
         print(f"server healthy on {args.host}:{args.port}; starting synth loop")
 
-        results: dict[tuple[str, str], dict] = {}
+        # Modes: "batch" = one pass non-streaming, "stream" = one streaming pass,
+        # "both" = each row gets both, results keyed by (voice_id, prompt_id, mode).
+        cols = (
+            ["batch"]
+            if args.mode == "batch"
+            else ["stream"] if args.mode == "stream" else ["batch", "stream"]
+        )
+        results: dict[tuple[str, str, str], dict] = {}
         for sister in fleet:
             voice_id = sister["voice_id"]
             for prompt in prompts:
-                key = (voice_id, prompt["id"])
                 text = _fill_template(prompt["template"], sister["id"], prompt["id"], responses)
                 if text is None:
-                    results[key] = {"status": "(no response cached)"}
+                    for col in cols:
+                        results[(voice_id, prompt["id"], col)] = {"status": "(no response cached)"}
                     print(f"  {voice_id}/{prompt['id']}: SKIP (no response cached)")
                     continue
-                wav_name = f"{voice_id}_{prompt['id']}.wav"
-                wav_path = output_dir / wav_name
-                print(f"  {voice_id}/{prompt['id']}: synthesizing ...")
-                ok, msg = _synthesize(args.host, args.port, voice_id, text, wav_path)
-                if ok:
-                    results[key] = {"status": "ok", "wav_name": wav_name}
-                    print(f"    -> {msg}")
-                else:
-                    results[key] = {"status": msg}
-                    print(f"    -> FAIL: {msg}")
+                for col in cols:
+                    key = (voice_id, prompt["id"], col)
+                    suffix = "" if args.mode == "batch" else f"_{col}"
+                    wav_name = f"{voice_id}_{prompt['id']}{suffix}.wav"
+                    wav_path = output_dir / wav_name
+                    print(f"  {voice_id}/{prompt['id']}/{col}: synthesizing ...")
+                    ok, info = _synthesize(
+                        args.host,
+                        args.port,
+                        voice_id,
+                        text,
+                        wav_path,
+                        stream=(col == "stream"),
+                    )
+                    if ok:
+                        results[key] = {
+                            "status": "ok",
+                            "wav_name": wav_name,
+                            "first_audio_ms": info["first_audio_ms"],
+                            "total_s": info["total_s"],
+                        }
+                        print(
+                            f"    -> {info['bytes']:,} bytes, "
+                            f"first audio {info['first_audio_ms']:.0f} ms, "
+                            f"total {info['total_s']:.1f} s"
+                        )
+                    else:
+                        results[key] = {"status": info.get("error", "fail")}
+                        print(f"    -> FAIL: {info.get('error')}")
 
-        index_path = _render_html(output_dir, fleet, prompts, responses, results)
+        index_path = _render_html(output_dir, fleet, prompts, responses, results, mode=args.mode)
         print(f"\nindex written to {index_path}")
         print(f"open it: open {index_path}" if sys.platform == "darwin" else f"open {index_path}")
         successes = sum(1 for r in results.values() if r.get("status") == "ok")

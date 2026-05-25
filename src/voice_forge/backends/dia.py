@@ -56,12 +56,17 @@ import numpy as np
 import soundfile as sf
 
 from . import VoiceRef, register_backend
+from ._chunking import chunk_text
 
 logger = logging.getLogger("voice_forge.backends.dia")
 
 DEFAULT_MODEL = "nari-labs/Dia-1.6B-0626"
 DEFAULT_SAMPLE_RATE = 24_000  # voice-forge output convention
 DIA_NATIVE_RATE = 44_100  # Dia model output rate
+# Smaller default than F5: Dia's max_new_tokens cap (~36 s of audio) makes
+# shorter chunks more reliable, and dia's per-call cost is high enough that
+# users feel the latency win of yielding sooner.
+DEFAULT_STREAM_CHUNK_CHARS = 600
 
 # Default generation parameters from upstream README. These are reasonable
 # starting points; per-voice tuning (QUEUED P2) will let users override.
@@ -215,13 +220,25 @@ class DiaBackend:
         return _resample_to_24khz(wav_44k, DIA_NATIVE_RATE)
 
     def synthesize_stream(self, text: str, ref: VoiceRef) -> Iterator[np.ndarray]:
-        """Dia has no exposed streaming through HF Transformers; degrade to batch.
+        """Streaming via sentence-boundary text-chunking.
 
-        The underlying SoundStorm architecture is autoregressive over audio
-        codes, so streaming is theoretically possible at the token level —
-        but not yet exposed through the public ``generate()`` surface.
+        Dia's HF Transformers ``generate()`` doesn't expose per-token streaming,
+        but we can split the input at sentence boundaries and call generate()
+        per chunk, yielding each chunk's audio as soon as it's ready. This also
+        helps with Dia's documented long-form behavior: each chunk gets a
+        fresh ``max_new_tokens`` budget, so per-chunk truncation hits less
+        often than with one giant call.
+
+        Chunk size defaults to ``DEFAULT_STREAM_CHUNK_CHARS`` (600 chars);
+        per-voice tunable via ``ref.metadata['sampling']['stream_chunk_chars']``.
         """
-        yield self.synthesize(text, ref)
+        sampling = ref.metadata.get("sampling") or {}
+        chunk_chars = int(sampling.get("stream_chunk_chars", DEFAULT_STREAM_CHUNK_CHARS))
+        chunks = chunk_text(text, chunk_chars)
+        if not chunks:
+            return
+        for chunk in chunks:
+            yield self.synthesize(chunk, ref)
 
     def health(self) -> dict:
         return {

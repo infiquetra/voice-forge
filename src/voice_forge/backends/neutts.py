@@ -21,7 +21,6 @@ See the home-lab engineering journal for the discovery story:
 
 from __future__ import annotations
 
-import re
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -29,6 +28,7 @@ from typing import Any
 import numpy as np
 
 from . import VoiceRef, register_backend
+from ._chunking import chunk_text as _chunk_text  # re-exported for back-compat with prior tests
 
 DEFAULT_MODEL = "neuphonic/neutts-air-q8-gguf"
 DEFAULT_DEVICE = "cpu"
@@ -70,36 +70,6 @@ def _apply_neutts_patches(n_ctx: int, repeat_penalty: float) -> None:
         # how llama_cpp ends up honoring repeat_penalty in BOTH batch and stream
         # paths (NeuTTS's _infer_stream_ggml omits the kwarg natively).
         Llama.__call__ = _patched_llama_call  # type: ignore[method-assign]
-
-
-def _chunk_text(text: str, max_chars: int) -> list[str]:
-    """Split text at sentence boundaries, respecting max_chars per chunk.
-
-    Sentences are detected by ``.!?`` followed by whitespace. A single
-    sentence longer than max_chars goes into its own chunk (we don't
-    split mid-sentence — that causes cloning quality drift).
-
-    Empty/whitespace-only input returns ``[]`` rather than ``[""]`` —
-    callers don't waste an inference pass on nothing.
-    """
-    stripped = text.strip()
-    if not stripped:
-        return []
-    sentences = re.split(r"(?<=[.!?])\s+", stripped)
-    chunks: list[str] = []
-    current: list[str] = []
-    current_len = 0
-    for sentence in sentences:
-        if current and current_len + len(sentence) + 1 > max_chars:
-            chunks.append(" ".join(current))
-            current = [sentence]
-            current_len = len(sentence)
-        else:
-            current.append(sentence)
-            current_len += len(sentence) + 1
-    if current:
-        chunks.append(" ".join(current))
-    return chunks
 
 
 class NeuTTSBackend:

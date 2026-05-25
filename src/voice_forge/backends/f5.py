@@ -29,11 +29,15 @@ from typing import Any
 import numpy as np
 
 from . import VoiceRef, register_backend
+from ._chunking import chunk_text
 
 logger = logging.getLogger("voice_forge.backends.f5")
 
 DEFAULT_MODEL = "F5TTS_v1_Base"
 DEFAULT_NFE_STEP = 32  # diffusion steps; lower → faster + lower quality
+DEFAULT_STREAM_CHUNK_CHARS = (
+    1000  # large default; F5's quality benefits from longer context per call
+)
 SAMPLE_RATE = 24_000  # F5 native output
 
 
@@ -135,12 +139,26 @@ class F5Backend:
         return np.asarray(wav, dtype=np.float32)
 
     def synthesize_stream(self, text: str, ref: VoiceRef) -> Iterator[np.ndarray]:
-        """No native streaming; degrades to a single chunk (full batch result).
+        """Streaming via sentence-boundary text-chunking.
 
-        F5's internal cross-fading means quality is best when the whole
-        utterance is generated together anyway.
+        F5's public API doesn't expose per-token streaming, but we can split
+        the input at sentence boundaries and call ``infer()`` per chunk,
+        yielding each chunk's audio as soon as it's ready. First-audio
+        latency drops from full-utterance-time to first-sentence-time.
+
+        Chunk size defaults to ``DEFAULT_STREAM_CHUNK_CHARS`` (1000 chars,
+        big-enough to preserve F5's quality) but is per-voice tunable via
+        ``ref.metadata['sampling']['stream_chunk_chars']``.
         """
-        yield self.synthesize(text, ref)
+        sampling = ref.metadata.get("sampling") or {}
+        chunk_chars = int(sampling.get("stream_chunk_chars", DEFAULT_STREAM_CHUNK_CHARS))
+        chunks = chunk_text(text, chunk_chars)
+        if not chunks:
+            return
+        # Per-chunk synth uses the same code path as batch synthesize()
+        # — including its sampling overrides — so quality stays consistent.
+        for chunk in chunks:
+            yield self.synthesize(chunk, ref)
 
     def health(self) -> dict:
         return {

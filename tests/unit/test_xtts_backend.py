@@ -130,11 +130,26 @@ def test_synthesize_ignores_ref_text(xtts_backend):
     assert isinstance(audio, np.ndarray)
 
 
-def test_synthesize_stream_degrades_to_single_chunk(xtts_backend):
+def test_synthesize_stream_single_sentence_one_chunk(xtts_backend):
     chunks = list(xtts_backend.synthesize_stream("Hello.", _voice_ref()))
     assert len(chunks) == 1
     assert chunks[0].dtype == np.float32
     assert len(chunks[0]) == 12000
+
+
+def test_synthesize_stream_multi_sentence_yields_per_chunk(xtts_backend):
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"stream_chunk_chars": 15}
+    long = "First sentence here. Second sentence. Third sentence here."
+    chunks = list(xtts_backend.synthesize_stream(long, ref))
+    assert len(chunks) >= 2
+    for c in chunks:
+        assert c.dtype == np.float32
+
+
+def test_synthesize_stream_empty_text_yields_nothing(xtts_backend):
+    chunks = list(xtts_backend.synthesize_stream("", _voice_ref()))
+    assert chunks == []
 
 
 def test_missing_ref_audio_raises(xtts_backend):

@@ -59,11 +59,13 @@ from typing import Any
 import numpy as np
 
 from . import VoiceRef, register_backend
+from ._chunking import chunk_text
 
 logger = logging.getLogger("voice_forge.backends.xtts")
 
 DEFAULT_MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"
 DEFAULT_LANGUAGE = "en"
+DEFAULT_STREAM_CHUNK_CHARS = 600  # medium default; XTTS quality holds well per-sentence
 SAMPLE_RATE = 24_000  # XTTS-v2 native output
 
 
@@ -168,13 +170,25 @@ class XTTSBackend:
         return np.asarray(wav, dtype=np.float32)
 
     def synthesize_stream(self, text: str, ref: VoiceRef) -> Iterator[np.ndarray]:
-        """No native streaming surfaced through ``TTS.api``; degrades to one chunk.
+        """Streaming via sentence-boundary text-chunking.
 
-        XTTS-v2's underlying GPT supports streaming inference via
-        ``model.inference_stream()``, but ``TTS.api.TTS.tts()`` doesn't surface
-        it. Wiring the lower-level path is a queued follow-up.
+        XTTS-v2's underlying GPT supports per-token streaming via
+        ``model.inference_stream()`` (not exposed through ``TTS.api``), so
+        v0.2 streams at the sentence level instead: split input at sentence
+        boundaries, call ``tts()`` per chunk, yield. First-audio latency
+        drops from full-utterance-time to first-sentence-time. Wiring the
+        token-level stream is a v0.3 follow-up.
+
+        Chunk size defaults to ``DEFAULT_STREAM_CHUNK_CHARS`` (600 chars);
+        per-voice tunable via ``ref.metadata['sampling']['stream_chunk_chars']``.
         """
-        yield self.synthesize(text, ref)
+        sampling = ref.metadata.get("sampling") or {}
+        chunk_chars = int(sampling.get("stream_chunk_chars", DEFAULT_STREAM_CHUNK_CHARS))
+        chunks = chunk_text(text, chunk_chars)
+        if not chunks:
+            return
+        for chunk in chunks:
+            yield self.synthesize(chunk, ref)
 
     def health(self) -> dict:
         return {

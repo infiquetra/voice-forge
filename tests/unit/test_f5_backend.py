@@ -88,12 +88,39 @@ def test_synthesize_passes_ref_audio_and_text_to_f5(f5_backend):
     assert last["nfe_step"] == 32
 
 
-def test_synthesize_stream_degrades_to_single_chunk(f5_backend):
-    """F5 has no native streaming; synthesize_stream yields the full batch as one chunk."""
+def test_synthesize_stream_single_sentence_one_chunk(f5_backend):
+    """Single-sentence input yields one chunk."""
     chunks = list(f5_backend.synthesize_stream("Hello.", _voice_ref()))
     assert len(chunks) == 1
     assert chunks[0].dtype == np.float32
-    assert len(chunks[0]) == 12000
+    assert len(chunks[0]) == 12000  # FakeF5TTS infer = 0.5s × 24000
+
+
+def test_synthesize_stream_multi_sentence_chunks_yielded(f5_backend):
+    """Multi-sentence input with a small chunk-size yields per-chunk audio."""
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"stream_chunk_chars": 15}
+    long = "First sentence here. Second sentence. Third sentence."
+    chunks = list(f5_backend.synthesize_stream(long, ref))
+    # Should produce at least 2 chunks at chunk_chars=15
+    assert len(chunks) >= 2
+    for c in chunks:
+        assert c.dtype == np.float32
+
+
+def test_synthesize_stream_empty_text_yields_nothing(f5_backend):
+    """Empty input yields zero chunks (not one empty chunk)."""
+    chunks = list(f5_backend.synthesize_stream("", _voice_ref()))
+    assert chunks == []
+
+
+def test_synthesize_stream_default_chunk_size_keeps_short_input_one_call(f5_backend):
+    """Without a sampling override, default chunk_chars=1000 packs short text into one chunk."""
+    chunks = list(f5_backend.synthesize_stream("Three. Short. Sentences.", _voice_ref()))
+    assert len(chunks) == 1
+    # And the single call should have used F5's default sampling
+    last_call = f5_backend._tts.calls[-1]
+    assert last_call["nfe_step"] == 32  # backend default
 
 
 def test_missing_ref_audio_raises(f5_backend):
