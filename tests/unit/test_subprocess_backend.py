@@ -23,7 +23,6 @@ from voice_forge.backends._subprocess import (
     SubprocessBackendNotInstalled,
 )
 
-
 # The fake shim script. Written to a temp dir + chmod'd executable + invoked
 # directly by SubprocessBackend's _spawn_child(). This is what would normally
 # be `voice-forge-backend-shim` installed in the per-backend venv.
