@@ -10,12 +10,13 @@ For the abstraction itself — the `TTSBackend` Protocol, the `VoiceRef` union d
 
 ## At a glance — what ships in v0.2
 
-| Backend | License | Voice paradigm | Cold load | Resident RSS | RTF (Apple Silicon CPU) | Status |
+| Backend | License | Voice paradigm | Cold load | Resident RSS | RTF (Apple Silicon M2 Ultra) | Status |
 |---|---|---|---|---|---|---|
-| **NeuTTS Air (Q8 GGUF)** | Apache 2.0 | Ref-WAV cloning (3-15s reference) | ~26 s | ~5.6 GB | 0.80 (faster than realtime) | shipped v0.1 |
-| **Kokoro 82M** | Apache 2.0 | Preset voice (~54 bundled embeddings) | ~3.6 s | ~1.4 GB | 0.07 (~14× realtime) | shipped v0.2 |
+| **NeuTTS Air (Q8 GGUF)** | Apache 2.0 | Ref-WAV cloning (3-15s reference) | ~26 s | ~5.6 GB | 0.80 (CPU+Accelerate) | shipped v0.1 |
+| **Kokoro 82M** | Apache 2.0 | Preset voice (~54 bundled embeddings) | ~3.6 s | ~1.4 GB | 0.07 (~14× realtime, CPU) | shipped v0.2 |
+| **F5-TTS** | MIT wrapper / Apache-2 model | Ref-WAV cloning (diffusion-based) | ~37 s (incl. 1.5 GB download) | ~1.5 GB | 1.05 (MPS autodetect) | shipped v0.2 |
 
-Both backends are pure-CPU on Apple Silicon. No MPS / CUDA required (and for NeuTTS Q8, MPS is actually *slower* — see [LEARNINGS § "Q4/Q8/BF16 × CPU/MPS"](engineering-journal/LEARNINGS.md#q4--q8--bf16--cpu--mps-on-apple-m-series--q4cpuaccelerate-is-fastest-bf16-is-4x-slower)).
+NeuTTS + Kokoro run pure-CPU on Apple Silicon (and for NeuTTS Q8, MPS is actually *slower* — see [LEARNINGS § "Q4/Q8/BF16 × CPU/MPS"](engineering-journal/LEARNINGS.md#q4--q8--bf16--cpu--mps-on-apple-m-series--q4cpuaccelerate-is-fastest-bf16-is-4x-slower)). F5 picks MPS by default on Apple Silicon and benefits — diffusion models are large enough that GPU kernel-launch overhead amortizes.
 
 Numbers above come from a controlled bench documented at [LEARNINGS § "Kokoro vs NeuTTS resource profile"](engineering-journal/LEARNINGS.md#kokoro-vs-neutts-resource-profile--kokoro-rtf-14-and-14-gb-ram-neutts-resident-memory-was-higher-than-estimated). Re-run the bench locally and post-deploy when you want to ground numbers in your hardware.
 
@@ -30,27 +31,28 @@ Decision tree, in order of how voice-forge users have asked it so far:
 → Kokoro. Pick from `af_bella`, `af_nicole`, `af_heart`, `am_adam`, `bf_emma`, etc. (full list in the [Kokoro section below](#kokoro-82m)). No cloning — these are pre-trained voice embeddings shipped with the model.
 
 **"I need ≥30-second utterances that stay coherent."**
-→ Kokoro for any-clean-voice. NeuTTS rots noticeably past ~30 s ([LEARNINGS § NeuTTS streaming content loss](engineering-journal/LEARNINGS.md#neutts-streaming-content-loss--streaming-emits-15-21-less-audio-than-batch-for-identical-input-on-long-content) and the empirical 41-69 s rows from the v0.2 audition show audible drift in the back half).
-→ For long-form WITH cloning: queued for v0.3 (F5 / XTTS / VibeVoice — see [QUEUED.md](engineering-journal/QUEUED.md)).
+→ Kokoro for any-clean-voice. F5-TTS for long-form **WITH cloning** — verified clean at 71-86 s on the Asgard sister refs in the v0.2 audition. NeuTTS rots noticeably past ~30 s ([LEARNINGS § NeuTTS streaming content loss](engineering-journal/LEARNINGS.md#neutts-streaming-content-loss--streaming-emits-15-21-less-audio-than-batch-for-identical-input-on-long-content) and the empirical 41-69 s rows from the v0.2 audition show audible drift in the back half).
 
 **"I'm running on constrained hardware (Pi 5, low-end Mac)."**
-→ Kokoro only. NeuTTS's ~5.6 GB resident set is too heavy for most 8 GB hosts.
+→ Kokoro only. NeuTTS's ~5.6 GB resident set is too heavy for most 8 GB hosts. F5 at ~1.5 GB resident is borderline — depends on what else runs on the host.
 
 **"I'm running on a real workstation (16+ GB Mac, 32+ GB server)."**
-→ Both. Same registry, same server; `backend` per voice in metadata.json routes to the right engine.
+→ All three. Same registry, same server; `backend` per voice in metadata.json routes to the right engine.
 
 ## Deployment-host capacity
 
-| Host (RAM)                    | Both backends | Kokoro only | NeuTTS only |
-|---|---|---|---|
-| Raspberry Pi 4 (4 GB)         | ❌ no chance         | ⚠ borderline (~1.5 GB)   | ❌ |
-| Raspberry Pi 5 (8 GB)         | ❌ would OOM         | ✓ comfortable             | ⚠ tight (swap-prone) |
-| Mac mini M1/M2 base (8 GB)    | ❌ no headroom       | ✓ comfortable             | ⚠ swap-prone |
-| Mac mini M2/M4 base (16 GB)   | ⚠ tight              | ✓                         | ✓ |
-| **Mac mini M4 Pro (24 GB)**   | ✓ comfortable        | ✓                         | ✓ (Asgard production host) |
-| Mac Studio / 32 GB+           | ✓ trivial            | ✓                         | ✓ |
+Combined-load = all three backends loaded into the same process (~8.5 GB resident).
 
-(Numbers measured 2026-05-24 on a Mac Studio. RSS numbers reflect both backends loaded; idle ~67 MB.)
+| Host (RAM)                    | All three | NeuTTS + F5 | Kokoro + F5 | Kokoro only | F5 only | NeuTTS only |
+|---|---|---|---|---|---|---|
+| Raspberry Pi 4 (4 GB)         | ❌ | ❌ | ❌ | ⚠ (~1.5 GB) | ❌ | ❌ |
+| Raspberry Pi 5 (8 GB)         | ❌ | ❌ | ⚠ tight | ✓ | ⚠ tight | ⚠ tight |
+| Mac mini M1/M2 base (8 GB)    | ❌ | ❌ | ⚠ tight | ✓ | ⚠ tight | ⚠ swap |
+| Mac mini M2/M4 base (16 GB)   | ⚠ tight | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Mac mini M4 Pro (24 GB)**   | ✓ comfortable | ✓ | ✓ | ✓ | ✓ | ✓ (Asgard prod host) |
+| **Mac Studio M2 Ultra (128 GB)** | ✓ trivial | ✓ | ✓ | ✓ | ✓ | ✓ (dev host) |
+
+Numbers measured 2026-05-24 / 2026-05-25 on a Mac Studio M2 Ultra. F5 cold-load + warm RSS: ~1.5 GB; combined with NeuTTS + Kokoro: ~8.5 GB total resident. Idle voice-forge server ~67 MB.
 
 ## NeuTTS Air
 
@@ -115,6 +117,31 @@ voice-forge synth kokoro-bella "Hello from Kokoro." --out /tmp/test.wav
 ```
 
 The voice IS the preset embedding — no ref WAV, no transcript. The `voice_id` you choose (`kokoro-bella` above) is just the local registry key.
+
+## F5-TTS
+
+- **License:** MIT wrapper ([`SWivid/F5-TTS`](https://github.com/SWivid/F5-TTS) Python lib, `pip install f5-tts`); Apache-2 model weights from the same repo.
+- **PyPI:** `f5-tts>=1.1,<2.0` (no upper Python bound; works on 3.11/3.12 in our matrix)
+- **Default model:** `F5TTS_v1_Base` (~1.5 GB on disk after first HF download)
+- **Inference engine:** PyTorch (Apple Silicon: MPS autodetect; falls back to CPU)
+- **Voice paradigm:** Ref-WAV cloning, **same shape as NeuTTS** — 3-15 s reference WAV + matching transcript. Encoding happens inside `infer()`; no pre-encode hook exposed (we set `encode_reference()` to return `None`).
+- **Sample rate:** 24 kHz mono float32 PCM
+- **Streaming:** No native streaming. `synthesize_stream` degrades to one chunk = full batch result.
+
+### F5 quirks worth knowing
+
+- **Slightly slower than realtime on M2 Ultra (RTF ~1.05)** with default `nfe_step=32`. A 30-second utterance takes ~31 seconds to synthesize. Lower `nfe_step` (e.g. 16) trades quality for speed; 16 is the practical floor.
+- **No 30-second cliff** — diffusion-based architecture sustains long utterances cleanly. The v0.2 audition produced clean 71-86 s long-form rows on the Asgard sister refs.
+- **Voice fidelity varies by reference.** The v0.2 audition surfaced this: on identical refs, **Saga and Hnoss came out faithful to their NeuTTS counterparts; Heid drifted noticeably**. F5's encoder appears sensitive to certain timbres / acoustic characteristics. Worth experimenting with seed values or reference-audio preprocessing per voice when cloning quality matters. See [LEARNINGS § F5 voice-fidelity variance](engineering-journal/LEARNINGS.md).
+- **F5's `infer()` accepts a `speed=` param** (defaults to 1.0). voice-forge doesn't expose this through the Protocol yet — see the queued "per-voice tunable params" item.
+
+### Adding an F5 voice
+
+```bash
+voice-forge voice add saga-f5 /path/to/saga-ref.wav --ref-text "matching transcript" --backend f5
+```
+
+Same workflow as NeuTTS — the only difference is `--backend f5`.
 
 ## Backends queued for future versions
 

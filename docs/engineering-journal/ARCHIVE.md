@@ -9,6 +9,33 @@
 
 ---
 
+## SHIPPED 2026-05-25 — v0.2: F5-TTS backend (cloning + long-form, diffusion-based)
+
+**Commit:** (this commit; latest on the `worktree-v0.2-pluggable-proof` branch)
+**From ROADMAP v0.3 (pulled forward):** "F5-TTS backend (Apache-2, diffusion-based, voice cloning)"
+
+Adds `src/voice_forge/backends/f5.py` wrapping `f5-tts==1.1.20` (MIT wrapper from `SWivid/F5-TTS`; Apache-2 model weights). Drop-in to the cloning-arm of `VoiceRef` — same `(ref_audio_path, ref_text)` shape as NeuTTS, so the registry / dispatch / CLI / audition all work unchanged.
+
+Cross-backend audition (`tests/functional/output/v0.2-triple-20260525T045249Z/`) on identical Asgard sister refs from `infiquetra/home-lab`. **Bench numbers vs NeuTTS + Kokoro on M2 Ultra:**
+
+| Backend | Cold load | Resident RSS | RTF | Long-form |
+|---|---|---|---|---|
+| NeuTTS Q8 | 26.1 s | 5.6 GB | 0.80 | rots past ~30 s |
+| Kokoro 82M | 3.6 s | 1.4 GB | 0.07 | preset only |
+| **F5-TTS** | **37.6 s** (incl. weight DL) | **1.5 GB** | **1.05** | **clean 71-86 s** |
+
+F5 closes the gap NeuTTS leaves open: cloning **and** long-form coherence. The user's audition verdict: "F5 sounds great. Held saga and hnoss's, but lost heid's." Heid drift is a voice-fidelity-variance finding (see [LEARNINGS § F5 voice-fidelity variance](../engineering-journal/LEARNINGS.md)) — tracked for follow-up via seed + CFG sweep + per-voice tuning.
+
+11 new tests in `tests/unit/test_f5_backend.py` cover load, synthesize, synthesize_stream degradation, missing-ref guard rails, nfe_step plumbing, and the not-loaded RuntimeError. `tests/_stubs/fake_f5lib.py` uses sys.modules injection (same pattern as fake_neuttslib + fake_kokorolib).
+
+`pyproject.toml` gets `[project.optional-dependencies] f5 = ["f5-tts>=1.1,<2.0"]`; `all` extra includes it; mypy override entries for `f5_tts` + `f5_tts.*`. `_BACKEND_MODULES` registers `"f5": "voice_forge.backends.f5"`.
+
+Three LEARNINGS entries: F5 resource profile (bench), F5 voice-fidelity variance (Heid drift), and a separate "NeuTTS HTTP 500 on hnoss-books p1" entry capturing the **first hard NeuTTS failure** seen during the combined-backend audition (root cause TBD — evidence-toward-NeuTTS-retirement).
+
+`docs/BACKENDS.md` gets a full F5 section with the bench table, F5-specific quirks (slow-but-realtime RTF, no cliff, voice-fidelity variance, `speed=` not yet plumbed), and an updated deployment-host capacity table reflecting the M2 Ultra (128 GB) dev host. `docs/ROADMAP.md` ticks F5 as shipped early.
+
+---
+
 ## SHIPPED 2026-05-24 — v0.2: Asgard audition harness + PyPI publish workflow
 
 **Commit:** (this commit; latest on the `worktree-v0.2-pluggable-proof` branch)

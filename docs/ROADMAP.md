@@ -40,12 +40,12 @@
 
 **Goal:** Add the heavier-but-higher-quality backends + long-form options.
 
-- [ ] **F5-TTS backend** (Apache-2, diffusion-based, voice cloning)
+- [x] **F5-TTS backend** (MIT wrapper / Apache-2 model, diffusion-based, voice cloning — pulled forward into v0.2 to test the pluggable abstraction with a third paradigm; no 30s cliff)
 - [ ] **XTTS-v2 backend** (Coqui, MPL-2, multilingual + voice cloning)
-- [ ] **Dia backend** (first community wrapper; multi-speaker via [S1]/[S2] tags; requires GPU)
+- [ ] **Dia backend** (first community wrapper; multi-speaker via [S1]/[S2] tags; needs Apple Silicon MPS validation)
 - [ ] **VibeVoice backend** (if licensing checks out — directly addresses long-form narrative quality)
 - [ ] **Piper backend** (subprocess-call wrapper; GPL-3 safe; 30+ languages)
-- [ ] Per-voice sampling-param overrides (temperature, top_k, repeat_penalty)
+- [ ] Per-voice sampling-param overrides (speed, nfe_step, cfg_strength, temperature, top_k, repeat_penalty) — see [QUEUED P2](engineering-journal/QUEUED.md)
 - [ ] OpenAI-API-compatible "api_key" header for SDK drop-in
 
 ## v0.4.0 — distributed + multi-tenant

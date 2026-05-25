@@ -44,12 +44,17 @@ kokoro = [
     # NOTE: requires `espeak-ng` on the host PATH (brew install espeak-ng).
     "kokoro>=0.9.4,<1.0",
 ]
+f5 = [
+    # F5-TTS backend (PyTorch + MPS-capable diffusion; voice cloning).
+    # Wrapper is MIT-licensed; model weights from SWivid/F5-TTS are Apache-2.
+    "f5-tts>=1.1,<2.0",
+]
 voice-lab = [
     # ElevenLabs Voice Lab puller + Whisper ref-trimmer
     "faster-whisper>=1.0",
 ]
 all = [
-    "voice-forge-tts[neutts,kokoro,voice-lab]",
+    "voice-forge-tts[neutts,kokoro,f5,voice-lab]",
 ]
 dev = [
     "pytest>=8.0",
@@ -114,6 +119,8 @@ module = [
     "llama_cpp",
     "faster_whisper",
     "kokoro",
+    "f5_tts",
+    "f5_tts.*",
 ]
 ignore_missing_imports = true
 

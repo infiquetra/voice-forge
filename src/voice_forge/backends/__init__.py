@@ -89,6 +89,7 @@ _REGISTRY: dict[str, type[TTSBackend]] = {}
 _BACKEND_MODULES: dict[str, str] = {
     "neutts": "voice_forge.backends.neutts",
     "kokoro": "voice_forge.backends.kokoro",
+    "f5": "voice_forge.backends.f5",
 }
 
 

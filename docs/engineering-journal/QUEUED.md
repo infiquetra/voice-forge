@@ -18,6 +18,25 @@
 
 ---
 
+## P2 — Per-voice tunable sampling params (speed, nfe_step, repeat_penalty, temperature, …)
+
+**Priority.** P2 — surfaced by F5 audition where the default `speed=1.0` produced noticeably slower-than-NeuTTS audio that some listeners found unnatural.
+
+**Effort.** ~half-day. Schema + plumbing through the Protocol + per-voice metadata.json updates + CLI surface.
+
+**Worth it when.** Now-ish for F5 (`speed`, `nfe_step`, `cfg_strength`, `seed`); also already needed for NeuTTS (`repeat_penalty`, `temperature`) and Kokoro (`speed`). Adding XTTS next will pile on more knobs (`temperature`, `top_k`, `top_p`, `length_penalty`). Without per-voice overrides, we end up with global defaults that work for some voices and break others — the v0.2 F5 audition already showed Heid drifts at default settings while Saga + Hnoss hold.
+
+**Context.** Three layers to design:
+1. **Per-voice metadata.json schema.** Add an optional `sampling: {key: value, ...}` block. Backends read what they recognize, ignore the rest. Backwards-compatible (missing key = backend default).
+2. **Protocol surface.** Either: (a) add an optional `sampling_overrides` arg to `synthesize()` / `synthesize_stream()`; or (b) backends pull from `VoiceRef.metadata.get("sampling", {})` inside their own implementations. (b) is non-breaking and easier to roll out.
+3. **CLI ergonomics.** `voice-forge voice add ... --sampling speed=1.1 --sampling nfe_step=24` writes into metadata.json. `voice-forge voice tune <id> --sampling key=val` for post-registration adjustment.
+
+Ideal end state: when you audition a sister and it sounds wrong, you tweak her metadata.json (or run `voice tune`) and re-audition without changing global backend defaults. This is what the user surfaced as "ideally on a per voice basis" in the v0.2 F5 audition feedback.
+
+**Open question for design time.** Do we expose ALL backend-native sampling params, or curate a smaller subset that's stable across backends? Curated wins for UX (`speed` works everywhere); native wins for power-users. Best answer is probably both: curated names with backend-specific extras under a namespaced key.
+
+---
+
 ## P2 — Kitten backend (smallest model, ONNX, CPU-only)
 
 **Priority.** P2 — lightweight option for resource-constrained hosts.

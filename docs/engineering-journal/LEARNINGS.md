@@ -25,6 +25,89 @@
 
 ---
 
+## 2026-05-25
+
+### F5-TTS on Apple Silicon — RTF ~1.05 with default `nfe_step=32`, RAM comparable to Kokoro, no 30-second cliff
+
+**Context.** Adding F5-TTS (`SWivid/F5-TTS`, MIT wrapper, Apache-2 model weights) as the cloning-capable backend candidate to replace NeuTTS, after NeuTTS's documented 30s-narrative cliff and reproducible heid-research short-utterance collapse made it clear we needed a better cloning path.
+
+**Evidence.** Controlled bench on Mac Studio M2 Ultra (128 GB unified memory), same shape as the prior Kokoro/NeuTTS bench: single server process, identical 274-char input for the warm synth, RSS sampled via `ps -o rss=`. F5 with default `device=None` (autodetect → MPS), default `nfe_step=32`:
+
+| Metric | F5-TTS | NeuTTS Q8 (prior bench) | Kokoro 82M (prior bench) |
+|---|---|---|---|
+| Disk (model cache) | 314 MB initial + 1.5 GB on first synth | 1.9 GB | 314 MB |
+| Cold-load latency | 37.6 s (incl. weight download) | 26.1 s | 3.6 s |
+| Resident RSS after load | 1,468 MB | 5,682 MB | 1,421 MB |
+| Synth time (274 chars) | 25.0 s | 16.6 s | 1.1 s |
+| Audio duration produced | 23.83 s | 20.74 s | 17.00 s |
+| RTF | 1.05 | 0.80 | 0.07 |
+
+**Triple-backend audition (9 sisters × 3 backends × 3 prompts; same Asgard refs from `infiquetra/home-lab/.../persona_refs/`):**
+
+- 26/27 rows synthesized (one HTTP 500 on `hnoss-books` NeuTTS p1 — see separate LEARNING below).
+- F5 produced **all 9 rows cleanly**, including p3 stories at 71-86 s long-form. No truncation, no degradation past the 30-s mark, no the-second-half-rots audible decay that NeuTTS shows.
+- F5 reads at a noticeably slower pace than NeuTTS / Kokoro on identical text (Saga p3: 86.5 s F5 vs 59.0 s NeuTTS vs 58.4 s Kokoro — same words). Default `speed=1.0` is conservative.
+
+**Mechanism.** F5 is a flow-matching diffusion model — generates audio in N iterative denoising steps (`nfe_step` controls how many). Each step is a forward pass through a ~335M-parameter transformer. The per-step cost is what dominates wall-clock; lowering `nfe_step` to 16 should approximately halve synth time with quality cost (untested in this LEARNING, queued for follow-up). MPS on M2 Ultra handles the diffusion well — the model is big enough that GPU kernel-launch overhead amortizes (unlike NeuTTS Q8, where MPS underperforms CPU).
+
+**What surprised.**
+- **F5 RAM is comparable to Kokoro**, not bigger. I had expected diffusion to be heavier than encoder-decoder + GAN vocoder; it's actually similar (~1.5 GB resident). The model file is bigger on disk (1.5 GB vs Kokoro's 314 MB) but the runtime working set is the same order.
+- **RTF 1.05 means slightly slower than realtime, not 5-10× slower.** PRIOR_ART.md had described F5 as "requires GPU for usable RTF (CPU is too slow for conversational use)." That was an NVIDIA-CUDA mental model; on Apple Silicon MPS, the M2 Ultra is fast enough for the use case to be viable.
+- **No 30-second cliff.** F5's diffusion architecture doesn't autoregressively drift the way NeuTTS's llama-cpp does. Long utterances stay coherent end-to-end.
+
+**Generalizable rule.** **Trust the model architecture, not the platform's marketing.** "Needs GPU" claims in upstream READMEs usually assume CUDA; Apple Silicon MPS with unified memory often satisfies the same constraint. Always measure rather than defer to the upstream's deployment defaults.
+
+**Decision.** F5 is the cloning-backend candidate for retiring NeuTTS, pending more audio review at scale and per-voice tuning ([QUEUED § Per-voice tunable params](QUEUED.md)).
+
+**Refs.** `src/voice_forge/backends/f5.py`, `tests/functional/output/v0.2-triple-20260525T045249Z/` (the audition WAVs), [Kokoro/NeuTTS bench](#kokoro-vs-neutts-resource-profile--kokoro-rtf-14-and-14-gb-ram-neutts-resident-memory-was-higher-than-estimated) for the parallel measurement template.
+
+---
+
+### F5 voice-fidelity variance — Heid drifted, Saga + Hnoss held, on identical reference audio
+
+**Context.** The triple-backend audition fed the same Asgard sister ref WAVs (`infiquetra/home-lab/.../persona_refs/<sister>/ref.wav` + matching `ref.txt`) to both NeuTTS and F5. NeuTTS's clones were the production baseline — they sound recognizably like each sister. F5's clones were the new variable.
+
+**Evidence.** Audition rows in `tests/functional/output/v0.2-triple-20260525T045249Z/`. User-supplied verdict 2026-05-25: "Held saga and hnoss's, but lost heid's." Subjectively, Saga's F5 clone preserves dry-witted timbre; Hnoss's preserves the careful-librarian cadence; **Heid's drifts — no longer recognizable as Heid**.
+
+**Mechanism.** Unverified. Plausible causes:
+- F5's reference-audio encoder might be sensitive to specific acoustic features (pitch range, breathiness, room acoustics) that one of the refs differs on. Heid's ref might have characteristics that fall outside the encoder's well-trained region.
+- Default `cfg_strength=2` may need per-voice tuning.
+- F5's diffusion sampling is stochastic — fixed `seed=None` means different runs produce different outputs. The "lost Heid" might be one bad seed; reproducibility check at fixed seed would tell.
+
+**Fix (queued).** No fix yet. Tracked under [QUEUED § Per-voice tunable params](QUEUED.md) — the per-voice metadata.json `sampling` block is exactly where seed / `cfg_strength` / `nfe_step` overrides would live. Two specific follow-ups before retiring NeuTTS on Heid:
+1. Reproducibility check: synth Heid p3 with fixed `seed=42` three times. If they're identical → drift is deterministic; if not → it's stochastic per-run.
+2. CFG sweep: try `cfg_strength` in [1.5, 2.0, 2.5, 3.0]. Higher CFG should pull harder toward the reference.
+
+Also worth investigating: Heid's `ref.wav` itself. If the recording has unique room reverberation or compression characteristics, re-trimming with `voice_lab.trim_to_sentence_boundary` and/or denoising might fix it.
+
+**Generalizable rule.** **Cross-backend voice fidelity is per-voice, not per-backend.** "Backend X clones well" is the wrong question — the right one is "backend X clones reference Y well." Voice-by-voice empirical check needed before claiming a backend is production-ready for a fleet.
+
+**Refs.** [F5-TTS resource profile](#f5-tts-on-apple-silicon--rtf-105-with-default-nfe_step32-ram-comparable-to-kokoro-no-30-second-cliff) (the bench LEARNING above), QUEUED.md (per-voice tunable params).
+
+---
+
+### NeuTTS HTTP 500 on hnoss-books p1 during triple-backend audition — first hard failure, root cause TBD
+
+**Context.** During the 27-row triple-backend audition (`v0.2-triple-20260525T045249Z`), the `hnoss-books/p1_hear_me` row returned HTTP 500 from the voice-forge server. This is **the first time we've seen NeuTTS hard-fail** — prior failures were the documented short-utterance collapse (`heid-research p1` → 0.16-0.20 s) which still returns valid (just very short) audio. A 500 is qualitatively different.
+
+**Evidence.** Audition log line: `hnoss-books/p1_hear_me: synthesizing ... -> FAIL: HTTP 500: Internal Server Error`. All other 26 rows succeeded. Same NeuTTS backend was working fine for saga-comms + heid-research p2/p3 in the same run.
+
+**Mechanism (hypotheses, unverified).**
+1. **Memory pressure from loading three backends in one process.** Combined resident ~8.5 GB. M2 Ultra has 128 GB so pressure is unlikely at OS level, but PyTorch's CUDA/MPS allocator might have its own constraints.
+2. **PyTorch state contamination.** F5 and Kokoro both load PyTorch models; NeuTTS does NOT use PyTorch directly but does use llama-cpp-python. Shared MPS / Metal state between F5 and the NeuTTS llama-cpp path is theoretically possible if both reach for Metal context.
+3. **A NeuTTS-side flake.** llama-cpp-python autoregressive sampling can occasionally produce edge-case input combinations that crash internally.
+4. **A voice-forge-side bug.** The lock + thread state in `NeuTTSBackend._lock` interacts poorly with concurrent requests if the server isn't actually serializing them. (FastAPI-asyncio + threading.Lock combo is worth a closer look.)
+
+**Fix.** Not yet. Move to QUEUED if reproducible; for now logged here as evidence-toward-NeuTTS-retirement. If we ship the F5-based replacement first, the 500 becomes a non-issue.
+
+**Next step if we want to investigate:** rerun the same triple-backend audition with verbose server logging; capture stderr. Currently the audition harness sends server stderr to PIPE without consuming it.
+
+**Generalizable rule.** **Combined-backend processes can surface failure modes that single-backend processes don't.** Future LEARNING + bench protocol: when adding a new backend, run an audition with **all** prior backends loaded too — the integration risk lives in the interaction, not the individual.
+
+**Refs.** Audition output `tests/functional/output/v0.2-triple-20260525T045249Z/` (note the missing `hnoss-books_p1_hear_me.wav`), `scripts/asgard_audition.py:_synthesize` (where the HTTP error is caught).
+
+---
+
 ## 2026-05-24
 
 ### Kokoro vs NeuTTS resource profile — Kokoro RTF ~14× and ~1.4 GB RAM, NeuTTS resident memory was higher than estimated
