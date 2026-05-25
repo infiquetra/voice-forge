@@ -26,11 +26,12 @@ import subprocess
 import tempfile
 import wave
 from collections.abc import Iterator
+from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
@@ -418,6 +419,25 @@ async def delete_voice(voice_id: str):
     registry = _registry()
     registry.delete(voice_id)
     return Response(status_code=204)
+
+
+# ---- Live in-browser WS demo ----
+
+_DEMO_HTML_PATH = Path(__file__).resolve().parent / "static" / "live_demo.html"
+
+
+@app.get("/demo", response_class=HTMLResponse)
+async def demo_page() -> FileResponse:
+    """Static HTML demo page that opens a WebSocket back to this server.
+
+    Visit ``http://<host>:<port>/demo`` in a browser. The page connects to
+    ``ws://<host>:<port>/v1/tts/stream``, sends text the way an upstream LLM
+    would (token-trickle), and plays each PCM frame the server pushes back
+    using the Web Audio API. Same-origin keeps CORS out of the picture.
+    """
+    if not _DEMO_HTML_PATH.is_file():
+        raise HTTPException(status_code=500, detail=f"demo page missing at {_DEMO_HTML_PATH}")
+    return FileResponse(_DEMO_HTML_PATH, media_type="text/html")
 
 
 # ---- Layer-2 streaming: WebSocket bidirectional ----

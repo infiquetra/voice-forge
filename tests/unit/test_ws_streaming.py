@@ -259,3 +259,19 @@ def test_ws_text_only_whitespace_is_dropped(ws_setup):
     # Only the one real sentence was synthesized.
     assert [c[1] for c in fake.calls] == ["One sentence."]
     assert [e for e in events if e["event"] == "complete"][0]["sentences_total"] == 1
+
+
+def test_demo_page_is_served(ws_setup):
+    """GET /demo returns the live-demo HTML page from the packaged static dir."""
+    client, _ = ws_setup
+    resp = client.get("/demo")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    body = resp.text
+    # Sanity-check that it's actually our demo page, not a generic 404.
+    assert "voice-forge" in body.lower()
+    assert "websocket" in body.lower()
+    assert "/v1/tts/stream" in body
+    # The voice picker is populated by an in-page fetch — confirm the JS
+    # would hit our REST endpoint.
+    assert "/v1/audio/voices" in body

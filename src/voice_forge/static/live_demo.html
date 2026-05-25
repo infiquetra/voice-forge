@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>voice-forge — live WS streaming demo</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+         max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { border-bottom: 2px solid #ccc; padding-bottom: 0.3em; margin-bottom: 0.2em; }
+  .sub { color: #666; font-size: 0.9em; margin-bottom: 1.5em; }
+  .controls { display: grid; grid-template-columns: max-content 1fr; gap: 0.6em 0.8em;
+              align-items: center; margin: 1em 0; }
+  label { font-weight: 600; }
+  select, textarea, button, input[type=number] {
+    font-family: inherit; font-size: inherit; padding: 0.4em 0.6em;
+    border: 1px solid #bbb; border-radius: 4px;
+  }
+  textarea { width: 100%; min-height: 7em; font-family: ui-monospace, Menlo, monospace; }
+  button { background: #2255aa; color: white; border: none; cursor: pointer;
+           padding: 0.6em 1.4em; font-weight: 600; }
+  button:hover:not(:disabled) { background: #1a4690; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  .row { display: flex; gap: 1em; align-items: center; margin: 1em 0; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5em;
+             background: #f5f5f5; padding: 0.8em 1em; border-radius: 4px; margin: 1em 0; }
+  .metric { font-size: 0.9em; }
+  .metric .label { color: #777; font-size: 0.85em; }
+  .metric .value { font-family: ui-monospace, Menlo, monospace; font-size: 1.1em; font-weight: 600; }
+  #log { background: #1e1e1e; color: #d4d4d4; font-family: ui-monospace, Menlo, monospace;
+         font-size: 0.85em; padding: 0.8em 1em; border-radius: 4px;
+         height: 240px; overflow-y: auto; white-space: pre-wrap; }
+  .log-line { margin: 0; padding: 0; }
+  .log-line.event { color: #6cc; }
+  .log-line.audio { color: #6c6; }
+  .log-line.error { color: #f66; }
+  details { background: #f9f9f9; padding: 0.6em 1em; border-radius: 4px; margin-top: 1em; }
+  summary { cursor: pointer; font-weight: 600; }
+  details code { background: #eee; padding: 0.1em 0.4em; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>voice-forge — live streaming demo</h1>
+<p class="sub">
+  Browser opens a WebSocket directly to the server, sends your text in
+  token-sized bursts (simulating an LLM), and plays each sentence's PCM the
+  instant it arrives. The "first audio" stopwatch starts when the WS connects
+  and stops when the first byte of synth comes back.
+</p>
+
+<div class="controls">
+  <label for="voice">Voice</label>
+  <select id="voice"><option value="">(loading...)</option></select>
+
+  <label for="text">Text</label>
+  <textarea id="text">Once upon a time, Loki visited my archive. He said he was lost. I knew that was a lie, of course, but I let him search anyway. He never found what he claimed to be looking for.</textarea>
+
+  <label for="trickle">Trickle mode</label>
+  <div class="row">
+    <label style="font-weight:normal">
+      <input type="checkbox" id="trickle" checked>
+      send text in <input type="number" id="token-size" value="12" min="1" max="500" style="width:5em">
+      char bursts every <input type="number" id="token-interval" value="40" min="0" max="2000" style="width:5em"> ms
+    </label>
+  </div>
+
+  <span></span>
+  <div class="row">
+    <button id="go">Speak</button>
+    <button id="stop" disabled style="background:#aa3333">Stop</button>
+  </div>
+</div>
+
+<div class="metrics">
+  <div class="metric">
+    <div class="label">first text sent</div>
+    <div class="value" id="m-first-text">&mdash;</div>
+  </div>
+  <div class="metric">
+    <div class="label">first audio received</div>
+    <div class="value" id="m-first-audio">&mdash;</div>
+  </div>
+  <div class="metric">
+    <div class="label">sentences synthesized</div>
+    <div class="value" id="m-sentences">0</div>
+  </div>
+</div>
+
+<div id="log">click "Speak" to begin...</div>
+
+<details>
+  <summary>What's actually happening</summary>
+  <p style="font-size:0.9em;line-height:1.5;">
+    This page opens a <code>WebSocket</code> to
+    <code>ws://&lt;same-host&gt;/v1/tts/stream</code>. The first frame is
+    <code>{"voice": "&lt;id&gt;"}</code>; the server replies with a session
+    JSON describing the audio format (24 kHz mono float32-LE PCM).
+  </p>
+  <p style="font-size:0.9em;line-height:1.5;">
+    Then the page either sends your text all at once (trickle off) or chops
+    it into N-char chunks with M ms gaps (trickle on). The server's
+    <code>SentenceBuffer</code> drains complete sentences as they form,
+    runs <code>backend.synthesize()</code> on each, and pushes the float32
+    PCM back as a binary WS frame. The browser appends each frame to a
+    Web Audio scheduling queue so sentences play back-to-back without gaps.
+  </p>
+  <p style="font-size:0.9em;line-height:1.5;">
+    Unlike the static <code>ws-*/index.html</code> audition pages &mdash; those
+    play pre-recorded WAV files captured during a one-time audition run &mdash;
+    this page does the whole stream <strong>live</strong> in your browser, every
+    time you click Speak.
+  </p>
+</details>
+
+<script>
+(() => {
+  const voiceSel = document.getElementById('voice');
+  const textArea = document.getElementById('text');
+  const trickleCb = document.getElementById('trickle');
+  const tokenSizeIn = document.getElementById('token-size');
+  const tokenIntervalIn = document.getElementById('token-interval');
+  const goBtn = document.getElementById('go');
+  const stopBtn = document.getElementById('stop');
+  const mFirstText = document.getElementById('m-first-text');
+  const mFirstAudio = document.getElementById('m-first-audio');
+  const mSentences = document.getElementById('m-sentences');
+  const logEl = document.getElementById('log');
+
+  function log(msg, cls) {
+    const ts = new Date().toLocaleTimeString('en-US', { hour12: false }) +
+               '.' + String(performance.now() % 1000 | 0).padStart(3, '0');
+    const line = document.createElement('div');
+    line.className = 'log-line ' + (cls || '');
+    line.textContent = '[' + ts + '] ' + msg;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function clearLog() { logEl.replaceChildren(); }
+  function resetMetrics() {
+    mFirstText.textContent = '—';
+    mFirstAudio.textContent = '—';
+    mSentences.textContent = '0';
+  }
+
+  function setVoiceOptions(opts) {
+    // opts: list of {value, text}
+    voiceSel.replaceChildren();
+    for (const o of opts) {
+      const el = document.createElement('option');
+      el.value = o.value;
+      el.textContent = o.text;
+      voiceSel.appendChild(el);
+    }
+  }
+
+  // Populate voice picker from the server's REST endpoint.
+  fetch('/v1/audio/voices')
+    .then(r => r.json())
+    .then(j => {
+      const voices = (j.data || []).slice().sort((a, b) => a.id.localeCompare(b.id));
+      if (voices.length === 0) {
+        setVoiceOptions([{ value: '', text: '(no voices in registry)' }]);
+      } else {
+        setVoiceOptions(voices.map(v => ({
+          value: v.id,
+          text: v.id + ' (' + v.backend + ')',
+        })));
+      }
+    })
+    .catch(err => {
+      setVoiceOptions([{ value: '', text: '(failed to load: ' + String(err) + ')' }]);
+    });
+
+  let ws = null;
+  let ac = null;           // AudioContext, created on first Speak (Safari autoplay rule)
+  let nextStartTime = 0;   // Web Audio scheduling cursor
+  let sentenceCount = 0;
+  let connectT0 = 0;
+  let firstTextAt = null;
+  let firstAudioAt = null;
+
+  async function speak() {
+    const voice = voiceSel.value;
+    if (!voice) { log('no voice selected', 'error'); return; }
+    const text = textArea.value;
+    if (!text.trim()) { log('no text', 'error'); return; }
+
+    goBtn.disabled = true;
+    stopBtn.disabled = false;
+    clearLog();
+    resetMetrics();
+    sentenceCount = 0;
+    firstTextAt = null;
+    firstAudioAt = null;
+    nextStartTime = 0;
+
+    // (Re-)create the AudioContext at 24 kHz so float32 PCM frames don't
+    // need resampling. Safari requires this to be created inside a user
+    // gesture, hence speak() being the trigger.
+    if (!ac || ac.state === 'closed') {
+      ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+    } else {
+      try { await ac.resume(); } catch (e) { /* ignore */ }
+    }
+
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = proto + '://' + location.host + '/v1/tts/stream';
+    log('connecting to ' + wsUrl, 'event');
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+    connectT0 = performance.now();
+
+    ws.onopen = () => {
+      log('ws open (+' + (performance.now() - connectT0).toFixed(0) + ' ms)', 'event');
+      ws.send(JSON.stringify({ voice }));
+    };
+
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === 'string') {
+        const event = JSON.parse(ev.data);
+        switch (event.event) {
+          case 'session':
+            log('session: ' + event.backend + ' @ ' + event.sample_rate + ' Hz ' + event.format, 'event');
+            sendText(text);
+            break;
+          case 'sentence_start':
+            log('sentence ' + event.idx + ' start: ' + JSON.stringify(event.text), 'event');
+            break;
+          case 'sentence_done':
+            sentenceCount++;
+            mSentences.textContent = String(sentenceCount);
+            log('sentence ' + event.idx + ' done synth_ms=' + event.synth_ms + ' samples=' + event.samples, 'audio');
+            break;
+          case 'complete':
+            log('complete (sentences_total=' + event.sentences_total + ')', 'event');
+            try { ws.close(); } catch (e) { /* ignore */ }
+            goBtn.disabled = false;
+            stopBtn.disabled = true;
+            break;
+          case 'error':
+            log('server error: ' + event.detail, 'error');
+            try { ws.close(); } catch (e) { /* ignore */ }
+            goBtn.disabled = false;
+            stopBtn.disabled = true;
+            break;
+        }
+      } else {
+        // Binary PCM frame — float32 little-endian
+        if (firstAudioAt === null) {
+          firstAudioAt = performance.now() - connectT0;
+          mFirstAudio.textContent = firstAudioAt.toFixed(0) + ' ms';
+        }
+        const pcm = new Float32Array(ev.data);
+        const buffer = ac.createBuffer(1, pcm.length, ac.sampleRate);
+        buffer.copyToChannel(pcm, 0);
+        const src = ac.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ac.destination);
+        // Schedule each frame back-to-back so sentences play seamlessly.
+        const startAt = Math.max(ac.currentTime, nextStartTime);
+        src.start(startAt);
+        nextStartTime = startAt + buffer.duration;
+      }
+    };
+
+    ws.onerror = (e) => { log('ws error: ' + e, 'error'); };
+    ws.onclose = () => {
+      log('ws closed', 'event');
+      goBtn.disabled = false;
+      stopBtn.disabled = true;
+    };
+  }
+
+  async function sendText(text) {
+    const trickle = trickleCb.checked;
+    const tokenSize = parseInt(tokenSizeIn.value, 10) || 12;
+    const tokenInterval = parseInt(tokenIntervalIn.value, 10) || 0;
+
+    if (!trickle) {
+      ws.send(JSON.stringify({ text: text, end: true }));
+      firstTextAt = performance.now() - connectT0;
+      mFirstText.textContent = firstTextAt.toFixed(0) + ' ms (sent all at once)';
+      return;
+    }
+    // Trickle in token-sized bursts.
+    for (let i = 0; i < text.length; i += tokenSize) {
+      const chunk = text.slice(i, i + tokenSize);
+      const isLast = i + tokenSize >= text.length;
+      ws.send(JSON.stringify(isLast ? { text: chunk, end: true } : { text: chunk }));
+      if (firstTextAt === null) {
+        firstTextAt = performance.now() - connectT0;
+        mFirstText.textContent = firstTextAt.toFixed(0) + ' ms';
+      }
+      if (!isLast && tokenInterval > 0) {
+        await new Promise(r => setTimeout(r, tokenInterval));
+      }
+    }
+  }
+
+  function stop() {
+    try { if (ws) ws.close(); } catch (e) { /* ignore */ }
+    try { if (ac) ac.suspend(); } catch (e) { /* ignore */ }
+    goBtn.disabled = false;
+    stopBtn.disabled = true;
+    log('stopped by user', 'event');
+  }
+
+  goBtn.addEventListener('click', speak);
+  stopBtn.addEventListener('click', stop);
+})();
+</script>
+
+</body>
+</html>
