@@ -28,7 +28,7 @@ import wave
 from collections.abc import Iterator
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .backends import available_backends, get_backend, known_backends, load_backend_module
 from .registry import Registry
+from .sentence_buffer import SentenceBuffer
 
 logger = logging.getLogger("voice_forge")
 logging.basicConfig(level=os.environ.get("VOICE_FORGE_LOG_LEVEL", "INFO").upper())
@@ -417,3 +418,121 @@ async def delete_voice(voice_id: str):
     registry = _registry()
     registry.delete(voice_id)
     return Response(status_code=204)
+
+
+# ---- Layer-2 streaming: WebSocket bidirectional ----
+
+# Wire protocol (client ↔ server, all text frames are JSON):
+#
+#   client → server
+#     {"voice": "saga-comms-f5"}              # FIRST message — voice binding
+#     {"text": "Once upon "}                  # append text to buffer
+#     {"text": "...", "end": true}            # final text + signal done
+#     {"end": true}                           # standalone end signal
+#
+#   server → client
+#     {"event":"session", "voice":..., "backend":..., "sample_rate":24000,
+#      "channels":1, "format":"pcm_f32le"}
+#     {"event":"sentence_start", "idx":0, "text":"Once upon a time."}
+#     <binary frame: float32-LE PCM at sample_rate Hz>     # one per sentence
+#     {"event":"sentence_done", "idx":0, "samples":12000, "synth_ms":4127}
+#     {"event":"complete", "sentences_total": 4}
+#     {"event":"error", "detail":"..."}     # then close
+#
+# The first-text-token to first-audio latency is what this surface is
+# optimized for. Layer-1 HTTP streaming saves you "time-to-first-audio
+# given a known utterance"; layer-2 also saves you the upstream LLM's
+# generation time, because synth begins as soon as the FIRST complete
+# sentence arrives — not when the whole utterance is known.
+
+
+@app.websocket("/v1/tts/stream")
+async def ws_tts_stream(ws: WebSocket) -> None:
+    """Bidirectional streaming: text-in, audio-out, one sentence at a time."""
+    await ws.accept()
+    try:
+        init = await ws.receive_json()
+    except WebSocketDisconnect:
+        return
+    voice_id = init.get("voice") if isinstance(init, dict) else None
+    if not voice_id:
+        await ws.send_json({"event": "error", "detail": "first message must include 'voice'"})
+        await ws.close(code=1008)
+        return
+    try:
+        voice_ref = _registry().get(voice_id)
+    except KeyError:
+        await ws.send_json({"event": "error", "detail": f"voice {voice_id!r} not in registry"})
+        await ws.close(code=1008)
+        return
+    try:
+        backend = _ensure_backend(voice_ref.backend, voice_ref.metadata)
+    except HTTPException as exc:
+        await ws.send_json({"event": "error", "detail": exc.detail})
+        await ws.close(code=1011)
+        return
+
+    await ws.send_json(
+        {
+            "event": "session",
+            "voice": voice_id,
+            "backend": voice_ref.backend,
+            "sample_rate": SAMPLE_RATE,
+            "channels": 1,
+            "format": "pcm_f32le",
+        }
+    )
+
+    buffer = SentenceBuffer()
+    sentence_idx = 0
+    end_received = False
+
+    async def _synth_and_send(sentence: str, idx: int) -> None:
+        nonlocal sentence_idx
+        import time
+
+        await ws.send_json({"event": "sentence_start", "idx": idx, "text": sentence})
+        t0 = time.monotonic()
+        # Offload sync synth to threadpool so the asyncio loop stays
+        # responsive — receiving more text from the client meanwhile.
+        audio = await run_in_threadpool(backend.synthesize, sentence, voice_ref)
+        synth_ms = int((time.monotonic() - t0) * 1000)
+        await ws.send_bytes(np.asarray(audio, dtype=np.float32).tobytes())
+        await ws.send_json(
+            {
+                "event": "sentence_done",
+                "idx": idx,
+                "samples": int(len(audio)),
+                "synth_ms": synth_ms,
+            }
+        )
+
+    try:
+        while not end_received:
+            try:
+                msg = await ws.receive_json()
+            except WebSocketDisconnect:
+                return
+            if not isinstance(msg, dict):
+                continue
+            chunk = msg.get("text") or ""
+            if chunk:
+                for sentence in buffer.feed(chunk):
+                    await _synth_and_send(sentence, sentence_idx)
+                    sentence_idx += 1
+            if msg.get("end"):
+                end_received = True
+                tail = buffer.flush()
+                if tail:
+                    await _synth_and_send(tail, sentence_idx)
+                    sentence_idx += 1
+        await ws.send_json({"event": "complete", "sentences_total": sentence_idx})
+    except Exception as exc:  # surface any backend-side failure to the client
+        logger.exception("ws_tts_stream failure for voice=%r", voice_id)
+        try:
+            await ws.send_json({"event": "error", "detail": str(exc)})
+        except Exception:
+            pass
+        await ws.close(code=1011)
+        return
+    await ws.close()
