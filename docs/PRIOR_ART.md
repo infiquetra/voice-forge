@@ -135,7 +135,9 @@ These weren't in the original Phase B candidate list but appear worth tracking f
 
 2. **Fish Audio S2 Pro** — Decoder-only transformer, 80+ languages, voice cloning. Dual-AR (4B slow + 400M fast). SGLang-based streaming. Apache 2.0. Find: `fish-audio/fish-audio`.
 
-3. **Chatterbox-Turbo (Resemble AI)** — 350M params, single-step diffusion, sub-200ms latency. Emotion exaggeration control. Voice cloning. MIT. Smallest + fastest of the new options.
+3. **Chatterbox-Turbo (Resemble AI)** — 350M params, single-step diffusion, sub-200ms latency. Emotion exaggeration control. Voice cloning. MIT wrapper.
+   - **Audition 2026-05-25:** good audio quality, handles Heid's ref cleanly (first cloning-class backend besides F5 to do so), **but no accent preservation** — falls in the pitch/gender-adapter bucket alongside XTTS. Long-form p3 truncates at ~36s with default config.
+   - **Packaging is hostile to shared venvs**: exact-version pins on `transformers==5.2.0`, `torch==2.6.0`, `diffusers==0.29.0`, `safetensors==0.5.3`, `gradio==6.8.0`. Cannot coexist with voice-forge's main venv. Queued for integration via the subprocess-isolated backend pattern (QUEUED P1).
 
 4. **MeloTTS (MyShell.ai)** — Multilingual, 6+ languages with mixed-language utterance support. CPU-friendly (runs on CPU at full inference). MIT. Find: `myshell-ai/meloTTS`.
 

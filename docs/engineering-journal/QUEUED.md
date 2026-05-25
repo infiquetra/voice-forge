@@ -18,6 +18,29 @@
 
 ---
 
+## P1 — Subprocess-isolated backend pattern (architectural)
+
+**Priority.** P1 — unblocks at least two backend candidates we can't ship without it (Chatterbox, Piper).
+
+**Effort.** ~1 day pending design choices. The core abstraction is one new backend base class + a venv-provisioning step + an IPC protocol (stdin/stdout JSON or a per-backend HTTP shim).
+
+**Worth it when.** Now-ish, given:
+- **Chatterbox-tts 0.1.7** has exact pins on `torch==2.6.0` + `transformers==5.2.0` + `diffusers==0.29.0` + `safetensors==0.5.3` + `gradio==6.8.0`. None of these are compatible with voice-forge's main venv (which holds F5 / Dia / XTTS / Kokoro all happily). Smoke-tested 2026-05-25 in an isolated `$CLAUDE_JOB_DIR` venv; quality is good enough to want to ship. See [Chatterbox findings LEARNING](../engineering-journal/LEARNINGS.md).
+- **Piper** is GPL-3 — voice-forge is Apache-2. Including Piper code in our codebase forces GPL on us; subprocess-only is the established workaround.
+- **Any future backend** with similar packaging hygiene issues benefits from the same pattern.
+
+**Context.** Two viable approaches:
+1. **Per-backend venv + JSON-over-stdin/stdout IPC.** voice-forge spawns a subprocess running a small server-like script in the backend's isolated venv. Requests/responses are JSON (text + voice_id) → raw WAV bytes (or base64'd). Cold-load cost is per-process startup once; subsequent synths reuse the live subprocess.
+2. **Per-backend venv + tiny HTTP shim.** Each isolated backend runs its own micro-server (FastAPI again, or just `http.server`), voice-forge proxies. More overhead per call but reuses our existing HTTP plumbing.
+
+(1) is leaner for the cloning-backend use case where latency matters. (2) is more debuggable.
+
+For both: voice-forge needs a way to provision the per-backend venv on first use (run `uv venv` + `uv pip install <pinned-deps>`). Could be a `voice-forge backend install <name>` admin command. Per-backend venv lives at `~/.voice-forge/venvs/<backend>/`.
+
+**Refs.** [Chatterbox LEARNING](../engineering-journal/LEARNINGS.md), `tests/functional/output/v0.2-chatterbox-smoke-20260525/` (audition WAVs from the isolated test — ephemeral, may not survive job teardown).
+
+---
+
 ## P2 — Per-voice tunable sampling params (speed, nfe_step, repeat_penalty, temperature, …)
 
 **Priority.** P2 — surfaced by F5 audition where the default `speed=1.0` produced noticeably slower-than-NeuTTS audio that some listeners found unnatural.
@@ -34,6 +57,38 @@
 Ideal end state: when you audition a sister and it sounds wrong, you tweak her metadata.json (or run `voice tune`) and re-audition without changing global backend defaults. This is what the user surfaced as "ideally on a per voice basis" in the v0.2 F5 audition feedback.
 
 **Open question for design time.** Do we expose ALL backend-native sampling params, or curate a smaller subset that's stable across backends? Curated wins for UX (`speed` works everywhere); native wins for power-users. Best answer is probably both: curated names with backend-specific extras under a namespaced key.
+
+---
+
+## P2 — Chatterbox-Turbo backend integration (depends on subprocess pattern)
+
+**Priority.** P2 — quality is good (single-step diffusion, clean Heid p1 — first cloning-class backend that doesn't break on her ref!) but cannot ship today.
+
+**Effort.** ~2-3 hours once the subprocess-isolated backend pattern (P1 above) lands. The actual `ChatterboxTurboTTS` API is clean: `from_pretrained(device=...)` + `.generate(text, audio_prompt_path=...)`.
+
+**Worth it when.** Subprocess pattern is ready AND we want a third identity-preserving cloning backend in the rotation (F5 is the leader; Chatterbox would be a backup with different failure modes).
+
+**Context.** Smoke-tested 2026-05-25 in an isolated venv at `$CLAUDE_JOB_DIR/chatterbox-venv`. 9 WAVs produced (3 sisters × 3 prompts).
+
+**Audition findings (audio quality):**
+- p1 (short utterance) on all 3 sisters: clean. **Heid p1 → 1.12 s of clean audio** — first cloning-class backend besides Kokoro/F5/XTTS to handle her ref without the autoregressive 0.16-0.20 s collapse. Single-step diffusion architecture sidesteps the trigger.
+- p2 (30 s introduction) on all 3: clean but **accent not preserved** on Saga + Hnoss. Same XTTS-style "pitch + gender adapt, accent lost" behavior. NOT identity-preserving cloning.
+- p3 (80 s story) on all 3: **truncated at ~35-37 s** AND becomes gibberish past the cap. Likely needs `max_new_tokens` (or chatterbox's equivalent) tuned per voice — see per-voice tunables QUEUED entry.
+
+**Audition findings (deployment-fitness):**
+- `chatterbox-tts==0.1.7` has **5 exact-version pins** on heavy ML deps: `torch==2.6.0`, `transformers==5.2.0`, `diffusers==0.29.0`, `safetensors==0.5.3`, `gradio==6.8.0`. The transformers pin alone is incompatible with every other v0.2 backend.
+- Runtime crash on construct: `perth.PerthImplicitWatermarker()` returned None. Required a no-op stub monkeypatch before model load. (Resemble's Perth watermarker library — same one we already disabled in NeuTTS for streaming click artifacts.)
+- M2 Ultra MPS RTF: 1.13-2.40 warm, 7.17 cold. Slower than F5, faster than XTTS-CPU.
+
+**To do at integration time:**
+1. Provision a per-backend venv with chatterbox's exact-pinned deps.
+2. Subprocess IPC: voice-forge → chatterbox-venv subprocess (text + ref_audio_path in, WAV bytes out).
+3. Per-voice sampling params for the long-form fix (whatever chatterbox's `max_tokens`-equivalent is).
+4. Document the Perth watermarker stub requirement.
+
+**Generalizable rule (captured in LEARNINGS).** Backends with exact-version pins on shared transitive deps need subprocess isolation; treat the pins as a fitness signal even before testing audio.
+
+**Refs.** `$CLAUDE_JOB_DIR/run_chatterbox_smoke.py` (the throwaway smoke script — may be gone after job teardown), [Subprocess pattern P1](#p1--subprocess-isolated-backend-pattern-architectural), [Chatterbox audio findings LEARNING](../engineering-journal/LEARNINGS.md).
 
 ---
 

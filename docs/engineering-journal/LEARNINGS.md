@@ -27,6 +27,50 @@
 
 ## 2026-05-25
 
+### Chatterbox-Turbo audition — exact-pin packaging hostile to shared venvs; cloning is pitch+gender only; Heid p1 works
+
+**Context.** Sixth backend candidate evaluated on the Asgard sister refs. Chatterbox-Turbo from Resemble AI: 350M params, single-step diffusion built on a T3 token model, MIT-licensed wrapper. Promised sub-200ms first-byte latency + emotion control.
+
+**Evidence (audio).** 9 WAVs synthesized in `$CLAUDE_JOB_DIR/chatterbox-audio/` (isolated venv, won't survive job teardown). User listening verdict 2026-05-25:
+
+> "accents are lost on first two smaller versions and total gibberish for the long story. I assume the long story gets better if better configure for the longer text."
+
+| Sister | p1 (short) | p2 (~30s) | p3 (~80s) |
+|---|---|---|---|
+| Saga | 1.32 s ✓ | 21.92 s ✓ (no accent) | 37.88 s ⚠ truncated → gibberish |
+| Heid | **1.12 s ✓** (first non-K/F/X cloning backend to handle her p1!) | 15.24 s ✓ (no accent) | 35.96 s ⚠ truncated |
+| Hnoss | 1.20 s ✓ | 18.20 s ✓ (no accent) | 35.00 s ⚠ truncated |
+
+**RTF on M2 Ultra MPS:** 1.13-2.40 warm, 7.17 cold. Format: 24 kHz float32 (WAVE_FORMAT_IEEE_FLOAT — Python stdlib `wave` can't read; soundfile works fine).
+
+**Cloning fidelity classification.** Adds to the XTTS bucket — **pitch + gender adapter, NOT identity-preserving**. F5 remains the only audited backend in the identity-preserving cloning bucket (with the Heid drift exception).
+
+**Evidence (deployment-fitness).** Chatterbox-tts 0.1.7 metadata reveals **five exact-version pins** on heavy ML deps:
+
+```
+torch==2.6.0
+transformers==5.2.0
+diffusers==0.29.0
+safetensors==0.5.3
+gradio==6.8.0
+```
+
+The `transformers==5.2.0` pin alone is incompatible with every other v0.2 backend (which need 4.x). Installing chatterbox into voice-forge's main venv broke F5, Kokoro, XTTS, Dia simultaneously — `transformers` was upgraded to 5.2 which removed APIs the other backends use (`transformers.pytorch_utils.isin_mps_friendly` etc.). Restoring required `uv pip install --reinstall "transformers<5"` to roll back, plus restoring `torch>=2.7,<2.10`.
+
+Plus a runtime crash on import: `perth.PerthImplicitWatermarker()` returned None because `resemble-perth` (Perth watermarker — same library we disabled in NeuTTS for click-artifact reasons) changed its API and chatterbox didn't update. Needed a no-op stub monkeypatch before model load to proceed.
+
+**Mechanism.** Chatterbox's exact-pinned approach is reasonable from their isolation perspective ("we tested with these specific versions; we don't promise anything else works") but pathological for downstream library integration. Combined with the Perth API breakage, two upstream packaging decisions made it impossible to ship Chatterbox as a coexisting v0.2 voice-forge backend.
+
+**Fix (queued).** Subprocess-isolated backend pattern, [P1 QUEUED entry](QUEUED.md). Per-backend venvs let each backend hold whatever exact pins upstream insists on without polluting voice-forge's core venv. Chatterbox integration becomes a follow-up after the pattern lands.
+
+**Generalizable rule.** **Treat exact-version pins on transitive ML deps as a packaging fitness signal**, not just a constraint to resolve. A backend wrapper that pins `transformers==X.Y.Z` exact has chosen "won't work in a shared venv with other transformers users." That decision propagates: voice-forge's `[chatterbox]` extra can't actually express the constraint — every other extra would silently break. The right architectural response isn't "negotiate the version" — it's "isolate that backend." Save the negotiation energy for the upstream PR to relax the pins, if you have time.
+
+Subsidiary rule: **the smoke-in-isolated-venv pattern is the right preflight** for any backend candidate whose pyproject pins worry you. Get the audio data point and the dep diagnostic in one pass; the audio answers "is this worth the integration cost," the deps answer "what does integration cost."
+
+**Refs.** [Chatterbox QUEUED P2](QUEUED.md), [Subprocess pattern QUEUED P1](QUEUED.md), `$CLAUDE_JOB_DIR/run_chatterbox_smoke.py` (ephemeral throwaway script), [cloning-fidelity spectrum LEARNING](#cloning-fidelity-is-a-spectrum-not-a-binary--xtts-v2-produces-clean-audio-with-zero-accent-preservation) (Chatterbox now in the pitch/gender-adapter bucket alongside XTTS).
+
+---
+
 ### Heid's reference WAV breaks autoregressive token-sampling — three backends, same failure mode
 
 **Context.** Across five backends (NeuTTS, Kokoro, F5, XTTS, Dia) auditioned against the same 9 Asgard sister refs from `infiquetra/home-lab/.../persona_refs/`, **Heid's `ref.wav` + "Can you hear me?" produces a 0.16-0.20 s near-silent WAV on every autoregressive backend tested**. The other 8 sisters' refs work fine on the same backends with the same prompt.
@@ -100,6 +144,7 @@ Subsidiary rule: **the audition harness has high leverage for finding cross-back
 | NeuTTS Air | ✓ all 9 (production baseline) | "sounds like the Mac mini" |
 | F5-TTS | ✓ Saga + Hnoss; ❌ Heid drifted | "Held saga and hnoss's, but lost heid's" |
 | XTTS-v2 | ❌ none preserved | "All sounded good, no accent on a single one. But no stutter or poor quality" |
+| Chatterbox-Turbo | ❌ none preserved | "accents are lost on first two smaller versions and total gibberish for the long story" |
 
 XTTS's failure isn't quality-related — the audio is clean, intelligible, no stutter or artifacts. It's that the cloning step produces a voice that's *adjacent* to the ref (similar gender, similar broad pitch range) but **doesn't preserve accent, fine-grained timbre, or persona character**. The Asgard sisters' refs are American English with distinct individual character; XTTS's outputs are generic-clean American female.
 
@@ -118,6 +163,8 @@ For use cases where "any reasonable female voice" is enough (generic narration, 
 - **No-clone preset**: Kokoro, Kitten — preset embeddings, no ref-audio input.
 
 When adding a new backend to BACKENDS.md, note **which point on this spectrum** it lands at, ideally validated by an audition pass before committing. The Audition harness is the right tool — ear judgment is the validator.
+
+**Update 2026-05-25 after Chatterbox audition:** Chatterbox-Turbo joins the pitch/gender-adapter bucket (no accent preservation on Saga + Hnoss, gibberish on long-form p3 at default config). With four backends audited, the spectrum split is **F5 alone in the identity-preserving bucket**, **XTTS + Chatterbox in pitch/gender adapter**, **Kokoro in preset-only**. F5's lead is widening — neither newer cloning-capable backend matched its identity preservation.
 
 **Decision (provisional).** F5 remains the leading NeuTTS-replacement candidate. XTTS stays in the registry as a "clean-voice-for-non-persona" backend option. Once per-voice tunables ship (QUEUED P2), revisit F5 with Heid-specific tuning to close that one remaining drift.
 
