@@ -2,32 +2,39 @@
 
 > Where voice-forge is heading. See `engineering-journal/QUEUED.md` for items in active consideration.
 
-## v0.1.0 — current target (NeuTTS-only with pluggable backend architecture)
+## v0.1.0 — NeuTTS-only with pluggable backend architecture (SHIPPED 2026-05-24)
 
 **Goal:** Ship the engine + one working backend, with the abstractions in place to add others.
 
-**Includes:**
-- [x] Repo scaffolded (Phase C of [home-lab plan](https://github.com/namredips/home-lab/blob/main/.claude/plans/) — DONE)
-- [ ] `TTSBackend` Protocol + `VoiceRef` union dataclass (Phase D)
-- [ ] NeuTTS backend (port of working v6 daemon from home-lab) (Phase D)
-- [ ] FastAPI server: `POST /v1/audio/speech`, `GET /v1/audio/voices`, `GET /health`, `POST /voices/{id}`, `POST /voices/from-elevenlabs` (Phase D)
-- [ ] CLI: `voice-forge serve`, `voice-forge synth`, `voice-forge voices`, `voice-forge voice add`, `voice-forge voice from-elevenlabs` (Phase D)
-- [ ] Voice Lab puller (ElevenLabs preview → ref WAV) (Phase D)
-- [ ] Ref trimmer (Whisper-based sentence-boundary cut) (Phase D)
-- [ ] Tests: unit + integration (Phase D)
-- [ ] Docker image (multi-stage build for CPU) (Phase D)
-- [ ] CI: lint, format, type-check, tests on push (Phase C/D)
+**Shipped (commit `1e9c583`):**
+- [x] Repo scaffolded (Phase C of [home-lab plan](https://github.com/namredips/home-lab/blob/main/.claude/plans/))
+- [x] `TTSBackend` Protocol + `VoiceRef` union dataclass
+- [x] NeuTTS backend (port of working v6 daemon from home-lab)
+- [x] FastAPI server: `POST /v1/audio/speech`, `GET /v1/audio/voices`, `GET /health`, `POST /voices/{id}`, `POST /voices/from-elevenlabs`
+- [x] CLI: `voice-forge serve`, `voice-forge synth`, `voice-forge voices`, `voice-forge voice add`, `voice-forge voice from-elevenlabs`
+- [x] Voice Lab puller (ElevenLabs preview → ref WAV)
+- [x] Ref trimmer (Whisper-based sentence-boundary cut)
+- [x] Tests: unit + integration
+- [x] Docker image (single-stage build for CPU)
+- [x] CI: lint, format, type-check, tests on push
 
-## v0.2.0 — pluggable proof
+## v0.2.0 — pluggable proof (in progress)
 
-**Goal:** Add a second backend to prove the abstraction works, plus add streaming/WS surface.
+**Goal:** Validate the pluggable-backend abstraction by adding a second backend without touching the dispatch code, plus ship PyPI distribution and an audio audition harness for the Asgard fleet. See [`.claude/plans/lets-take-a-look-optimized-koala.md`](../.claude/plans/lets-take-a-look-optimized-koala.md) for the locked plan.
 
-- [ ] **Kokoro backend** (validates preset-voice arm of `VoiceRef`; CPU-friendly)
-- [ ] **Kitten backend** (smallest model, ONNX, CPU-only)
-- [ ] WebSocket bidirectional streaming endpoint (`WS /tts/stream`)
-- [ ] PyPI publishing pipeline (release tags → built wheels → PyPI)
-- [ ] Voice-mixing syntax (Kokoro-style `name(weight)+name(weight)`) where backend supports it
-- [ ] Wyoming protocol adapter (Home Assistant integration; opt-in)
+- [ ] Backend dispatch refactor — drop the hard-coded `if name == "neutts"` branches; registry-driven via `load_backend_module()`
+- [ ] **Kokoro backend** (hexgrad/kokoro, Apache-2, PyTorch+MPS — validates preset-voice arm of `VoiceRef`)
+- [ ] Voice-mixing syntax (Kokoro-style `name(weight)+name(weight)`) — parser ships; full tensor blending may slip to v0.2.x
+- [ ] NeuTTS backend body test coverage via `sys.modules` injection
+- [ ] PyPI publishing pipeline (OIDC trusted publishing; dist name `voice-forge-tts`)
+- [ ] Cleanup tail: version harmonization, dist rename, /tmp upload leak fix, Whisper threadpool wrap, `_porting/` relocation, journal hygiene
+- [ ] Asgard audition harness (`scripts/sync_fleet_from_home_lab.py` + `scripts/asgard_audition.py` producing 27 audible WAVs + HTML index)
+
+**Deferred to v0.2.x:**
+- Kitten backend (ONNX, CPU-only)
+- WebSocket bidirectional streaming
+- Wyoming protocol adapter (Home Assistant integration)
+- Proper `speed` field plumbing through TTSBackend Protocol
 
 ## v0.3.0 — quality + breadth
 

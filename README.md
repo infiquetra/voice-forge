@@ -3,7 +3,10 @@
 **Pluggable TTS service for agent voices** — a self-hosted text-to-speech engine with cloning, voice library management, and a REST API.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Status: v0 / pre-release](https://img.shields.io/badge/status-v0%2Fpre--release-orange.svg)](docs/ROADMAP.md)
+[![PyPI](https://img.shields.io/badge/PyPI-voice--forge--tts-blue.svg)](https://pypi.org/project/voice-forge-tts/)
+[![Status: v0.2](https://img.shields.io/badge/status-v0.2-orange.svg)](docs/ROADMAP.md)
+
+> **PyPI distribution name:** `voice-forge-tts` (the bare `voice-forge` name on PyPI was taken before v0.1.0 published — see [docs/engineering-journal/ARCHIVE.md](docs/engineering-journal/ARCHIVE.md)). The Python import path stays `voice_forge`.
 
 ## What it is
 
@@ -24,11 +27,18 @@ If you're building voice agents, you want:
 
 The existing self-hosted TTS landscape (see [docs/PRIOR_ART.md](docs/PRIOR_ART.md)) has the pieces scattered across different projects. voice-forge stitches them together.
 
-## Quick start (when v0.1.0 ships)
+## Quick start
 
 ```bash
-# Install
-uv pip install voice-forge
+# Install with backends you want (extras are additive):
+uv pip install "voice-forge-tts[neutts,voice-lab]"      # NeuTTS + Whisper trimmer
+uv pip install "voice-forge-tts[kokoro,voice-lab]"      # Kokoro + Whisper trimmer
+uv pip install "voice-forge-tts[neutts,kokoro,voice-lab]"  # both
+
+# Kokoro requires espeak-ng on the host:
+brew install espeak-ng        # macOS
+# OR
+apt-get install espeak-ng     # Linux
 
 # Run the server
 voice-forge serve --host 127.0.0.1 --port 9876
@@ -36,9 +46,12 @@ voice-forge serve --host 127.0.0.1 --port 9876
 # Synth directly (no server)
 voice-forge synth example "Hello from voice-forge." /tmp/hello.wav
 
+# Register a Kokoro preset voice
+voice-forge voice add kokoro-bella --backend kokoro --preset af_bella
+
 # Pull a voice from ElevenLabs and add to local library
 export ELEVENLABS_API_KEY=...
-voice-forge voice from-elevenlabs <voice_id>
+voice-forge voice from-elevenlabs my-voice --elevenlabs-voice-id <id>
 
 # Use via HTTP (OpenAI-compatible)
 curl http://127.0.0.1:9876/v1/audio/speech \
@@ -49,11 +62,12 @@ curl http://127.0.0.1:9876/v1/audio/speech \
 
 ## Status
 
-**v0 pre-release.** Not on PyPI yet. Working code lives on the `main` branch; tag `v0.1.0` will be the first release.
+**v0.2.0.** Pluggable proof — NeuTTS + Kokoro backends, OpenAI-compatible REST surface, PyPI install via `voice-forge-tts`.
 
-- Backend: NeuTTS Air (Apache-2, working today)
+- Backends shipped: NeuTTS Air (Apache-2), Kokoro-82M (Apache-2)
 - Other backends: see [ROADMAP.md](docs/ROADMAP.md)
-- API: REST (chunked transfer for streaming). WebSocket + Wyoming opt-in adapters planned for v0.2.
+- API: REST (chunked transfer for streaming). WebSocket + Wyoming opt-in adapters planned for v0.3.
+- Release notes: [`docs/engineering-journal/ARCHIVE.md`](docs/engineering-journal/ARCHIVE.md) (we use the journal's ARCHIVE.md as the changelog).
 
 ## Context for new contributors
 

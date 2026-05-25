@@ -3,8 +3,8 @@ requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [project]
-name = "voice-forge"
-version = "0.1.0-pre"
+name = "voice-forge-tts"
+version = "0.2.0"
 description = "Pluggable TTS service for agent voices — synthesis, cloning, voice lab, registry"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -12,19 +12,20 @@ requires-python = ">=3.11"
 authors = [
     { name = "Jeffrey Cox", email = "jeff@infiquetra.com" },
 ]
+# Note: import name is `voice_forge` (PEP 8); the PyPI distribution name is
+# `voice-forge-tts` because the bare `voice-forge` name on PyPI was already
+# taken by an unrelated project before v0.1.0 published.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
-    "httpx>=0.27",
     "pydantic>=2.6",
     "numpy>=1.26",
     "soundfile>=0.12",
@@ -52,6 +53,23 @@ dev = [
 
 [project.scripts]
 voice-forge = "voice_forge.cli:main"
+
+[tool.hatch.build.targets.wheel]
+# Dist name is voice-forge-tts but the import package is voice_forge.
+# Hatchling can't auto-derive that mapping from the renamed dist; declare it.
+packages = ["src/voice_forge"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/voice_forge",
+    "tests",
+    "docs",
+    "docker",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
 
 [project.urls]
 Homepage = "https://github.com/infiquetra/voice-forge"

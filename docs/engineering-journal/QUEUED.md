@@ -18,18 +18,6 @@
 
 ---
 
-## P1 — Phase D: implement v0.1.0 (NeuTTS backend + server + CLI + tests)
-
-**Priority.** P1 — the actual code that makes voice-forge functional.
-
-**Effort.** ~4-6 hours per home-lab plan estimate (revised up from initial 3-4h).
-
-**Worth it when.** Already triggered — this is what Phase C scaffolding was preparing for.
-
-**Context.** Port the v6 NeuTTS daemon from home-lab into `src/voice_forge/backends/neutts.py`. Fill out server endpoints, CLI commands, registry, voice_lab utilities. Add unit + integration tests. Tag `v0.1.0` when complete. Refs: [home-lab plan Phase D](https://github.com/namredips/home-lab/blob/main/.claude/plans/i-am-under-the-merry-finch.md).
-
----
-
 ## P2 — Kokoro backend (validates preset_id arm of VoiceRef)
 
 **Priority.** P2 — first second backend, validates the abstraction.

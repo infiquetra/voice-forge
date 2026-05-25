@@ -1,6 +1,6 @@
 # voice-forge container image.
-# Phase D will flesh this out with multi-stage build + NeuTTS install + entrypoint.
-# For now, a placeholder.
+# Single-stage build for the NeuTTS-only deploy. Multi-stage + Kokoro
+# variants land when those backends ship to the image.
 
 FROM python:3.11-slim
 

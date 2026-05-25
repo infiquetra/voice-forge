@@ -23,14 +23,17 @@ import os
 import shutil
 import struct
 import subprocess
+import tempfile
 import wave
 from collections.abc import Iterator
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .backends import available_backends, get_backend
 from .registry import Registry
 
@@ -42,7 +45,7 @@ SAMPLE_RATE = 24_000
 
 app = FastAPI(
     title="voice-forge",
-    version="0.1.0.dev0",
+    version=__version__,
     description="Pluggable TTS service for agent voices",
 )
 
@@ -85,11 +88,14 @@ class SpeechRequest(BaseModel):
     input: str = Field(..., description="Text to synthesize")
     voice: str = Field(..., description="voice_id from registry")
     response_format: str = Field(default="wav", description="wav | mp3 | opus | pcm")
+    # Backends honor speed differently: kokoro KPipeline accepts speed=
+    # directly; NeuTTS has no native speed control and ignores it.
+    # Plumbing through the TTSBackend Protocol is deferred (v0.2.x).
     speed: float = Field(
         default=1.0,
         ge=0.25,
         le=4.0,
-        description="Playback speed (informational; not all backends honor)",
+        description="Playback speed (kokoro honors; neutts ignores)",
     )
     stream: bool = Field(
         default=False, description="Use chunked transfer for progressive synthesis"
@@ -212,7 +218,7 @@ async def health() -> dict:
     registry = _registry()
     return {
         "ok": True,
-        "version": "0.1.0.dev0",
+        "version": __version__,
         "registry_dir": str(registry.root),
         "voices_count": len(registry.list()),
         "backends_available": available_backends(),
@@ -310,39 +316,50 @@ async def register_voice(
     overwrite: bool = Form(default=False),
 ) -> VoiceInfo:
     """Register a new voice from an uploaded ref WAV."""
-    # Save uploaded file to a temp path
-    tmp_path = f"/tmp/voice_forge_upload_{voice_id}.wav"
-    with open(tmp_path, "wb") as f:
-        f.write(await ref_audio.read())
+    # Save upload to a unique temp file. registry.register will copy it
+    # into the canonical store, so we delete the temp in the finally
+    # block — prevents /tmp from growing over the life of the process.
+    with tempfile.NamedTemporaryFile(
+        suffix=".wav", delete=False, prefix="voice_forge_upload_"
+    ) as tmp_f:
+        tmp_path = tmp_f.name
+        tmp_f.write(await ref_audio.read())
 
-    # Whisper-transcribe if no ref_text provided
-    if ref_text is None:
-        from .voice_lab.whisper import transcribe
-
-        try:
-            ref_text = transcribe(tmp_path, language=language)
-        except ImportError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    registry = _registry()
     try:
-        v = registry.register(
-            voice_id=voice_id,
-            ref_audio_path=tmp_path,
-            ref_text=ref_text,
-            backend=backend,
-            metadata={"language": language, "description": description},
-            overwrite=overwrite,
+        # Whisper-transcribe if no ref_text provided. Whisper is sync +
+        # CPU-bound, so push it off the event loop.
+        if ref_text is None:
+            from .voice_lab.whisper import transcribe
+
+            try:
+                ref_text = await run_in_threadpool(transcribe, tmp_path, language=language)
+            except ImportError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        registry = _registry()
+        try:
+            v = registry.register(
+                voice_id=voice_id,
+                ref_audio_path=tmp_path,
+                ref_text=ref_text,
+                backend=backend,
+                metadata={"language": language, "description": description},
+                overwrite=overwrite,
+            )
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return VoiceInfo(
+            id=v.voice_id,
+            backend=v.backend,
+            language=v.metadata.get("language"),
+            description=v.metadata.get("description"),
+            metadata=v.metadata,
         )
-    except FileExistsError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return VoiceInfo(
-        id=v.voice_id,
-        backend=v.backend,
-        language=v.metadata.get("language"),
-        description=v.metadata.get("description"),
-        metadata=v.metadata,
-    )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
 
 
 @app.post("/voices/from-elevenlabs", response_model=VoiceInfo, status_code=201)

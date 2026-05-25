@@ -21,6 +21,8 @@ from pathlib import Path
 import click
 import numpy as np
 
+from . import __version__
+
 
 def _import_backend(backend_name: str):
     """Import a backend module to trigger its register_backend() call."""
@@ -53,7 +55,7 @@ def _resolve_text_arg(text_arg: str) -> str:
 
 
 @click.group()
-@click.version_option(version="0.1.0.dev0", prog_name="voice-forge")
+@click.version_option(version=__version__, prog_name="voice-forge")
 def main() -> None:
     """voice-forge — pluggable TTS service for agent voices."""
 
@@ -340,7 +342,7 @@ def health() -> None:
 
     registry = Registry()
     info = {
-        "version": "0.1.0.dev0",
+        "version": __version__,
         "registry_dir": str(registry.root),
         "voices_count": len(registry.list()),
         "backends_available": available_backends(),
