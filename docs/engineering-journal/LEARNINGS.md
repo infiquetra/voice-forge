@@ -27,6 +27,43 @@
 
 ## 2026-05-24
 
+### Kokoro vs NeuTTS resource profile — Kokoro RTF ~14× and ~1.4 GB RAM, NeuTTS resident memory was higher than estimated
+
+**Context.** After validating the pluggable abstraction by running the audition harness against both backends, the user asked for the resource impact of adding Kokoro. Needed actual measurements (not estimates) so deployment-host decisions (Pi vs Mac mini vs Mac Studio) could be made honestly.
+
+**Evidence.** Controlled bench in one server process: cold-load each backend serially, identical 274-char input for the warm synth, RSS sampled via `ps -o rss=`. Mac Studio M-series, Python 3.12, voice-forge worktree venv:
+
+| Metric | NeuTTS Q8 GGUF | Kokoro 82M | Delta |
+|---|---|---|---|
+| Disk (HF model cache) | 1.9 GB (neucodec 1.1G + q8-gguf 766M) | 314 MB | +314 MB |
+| Disk (net-new pip deps when NeuTTS already installed) | — | 36 MB (kokoro 72KB + misaki 15MB + spacy 21MB) | +36 MB |
+| Cold-load latency | 26.1s | 3.6s | — |
+| Resident RSS after load | 5,682 MB | +1,421 MB on top of NeuTTS = 7,103 MB combined | +1.4 GB |
+| Synth time (274 chars, ~17-21s audio out) | 16.6s | 1.1s | — |
+| Real-time factor (RTF) | 0.80 | **0.07** (~14× realtime) | — |
+
+Reference run that produced the audition WAVs was 4m02s wall-clock for 18 rows (9 NeuTTS + 9 Kokoro); the controlled bench above isolates per-backend cost more cleanly.
+
+**Mechanism.**
+- NeuTTS Q8 disk-to-resident expansion is large because llama-cpp-python materializes the GGUF into a memory-mapped buffer, then layers in KV cache + neucodec activations. The 766 MB on-disk model expands to ~5.6 GB working set during inference.
+- Kokoro's resident cost (~1.4 GB) is the 82M-parameter PyTorch model + transformers tokenizer + misaki spaCy pipeline + activations.
+- Kokoro's RTF dominance comes from being a small encoder-decoder model with no token-by-token LLM-style decoding; NeuTTS does autoregressive token generation via llama-cpp which is inherently slower per-token.
+
+**What surprised.**
+- NeuTTS resident memory was ~3× higher than the mental model. I had been describing it as "~2-3 GB resident." The real number is **5.6 GB**. The Q8 disk size (766 MB) is misleading — llama-cpp's KV cache + neucodec push it well past the model file's size.
+- NeuTTS RTF is 0.80 on Apple Silicon CPU, not 1.0. I'd been describing it as "~RTF 1" loosely. It's faster than realtime — just not by much.
+- Kokoro RTF 0.07 is ~14×, not the "7-10×" I'd initially eyeballed from the audition wall-clock. The audition was inflated by NeuTTS rows running concurrently in the same process timer.
+
+**Fix / decision.** Updated `docs/BACKENDS.md` with the table above + a deployment-host implication matrix (Pi 4 / Pi 5 / Mac mini base / Mac mini Pro / Mac Studio). Future LEARNINGS for additional backends should follow the same bench shape (same server, same input, isolated RSS samples) so the numbers compose into a reference table.
+
+**Generalizable rule.** **Trust on-disk model size as a lower bound, not a working-memory estimate.** For inference engines that build KV caches / activations / vocoder buffers on top of the loaded weights, resident memory can be 5-10× the file size. Always measure resident-after-warmup, not at-load.
+
+A second rule: **measure RTF in a single-backend process.** A combined-backend run's wall-clock divided by total audio understates the fast backend's RTF and overstates the slow one's. Isolate.
+
+**Refs.** `docs/BACKENDS.md` (the reference table this LEARNING informs), [Kokoro library pick](#kokoro-library-pick--kokoro-apache-2--pytorch-over-kokoro-onnx-mit--onnx-trading-python-313-support) (license choice that landed us on the PyTorch wrapper rather than the smaller ONNX path), `pyproject.toml` (kokoro/neutts optional extras showing the install layering).
+
+---
+
 ### Kokoro library pick — `kokoro` (Apache-2 / PyTorch) over `kokoro-onnx` (MIT / ONNX), trading Python 3.13 support
 
 **Context.** v0.2 adds a second backend to prove the pluggable abstraction. Two candidate libraries both publish to PyPI under the same model family (Kokoro-82M, Apache-2 weights from `hexgrad/Kokoro-82M`):

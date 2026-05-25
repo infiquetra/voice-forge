@@ -79,6 +79,7 @@ If you're starting fresh on this repo, the engineering journal at [`docs/enginee
 - [`DECISIONS.md`](docs/engineering-journal/DECISIONS.md) — 5 locked architectural choices (Apache-2, Q8 default, batch default, Protocol abstraction, REST surface) with rejected alternatives + revisit-when conditions
 - [`QUEUED.md`](docs/engineering-journal/QUEUED.md) — ~20 prioritized future work items: backends (F5, XTTS, Kokoro, Dia, Kitten, MeloTTS, VibeVoice, Chatterbox, Piper), WebSocket / Wyoming, PyPI publishing, auth, etc.
 - [`docs/PRIOR_ART.md`](docs/PRIOR_ART.md) — comparative study of 12 prior projects (Coqui, OpenedAI-Speech, xtts-streaming-server, Kokoro-FastAPI, Wyoming, Dia, Kitten + BentoML/Inworld surveys) with license compatibility matrix
+- [`docs/BACKENDS.md`](docs/BACKENDS.md) — per-backend reference: license, voice paradigm, RTF, resident-memory cost, deployment-host capacity table, "pick this backend when..." decision guide
 
 Together these answer "why is voice-forge designed the way it is" + "what's the next work to do" without requiring you to read the `infiquetra/home-lab` repo where this prototype originated.
 

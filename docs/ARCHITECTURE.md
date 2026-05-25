@@ -197,3 +197,5 @@ WebSocket + Wyoming bidirectional streaming are tracked in v0.2 (see [ROADMAP.md
 ## Future directions
 
 See [ROADMAP.md](ROADMAP.md) for the full backend + feature roadmap.
+
+For per-backend reference (license, voice paradigm, RTF, resident-memory cost, deployment-host capacity, "pick this backend when..." decision guide), see [BACKENDS.md](BACKENDS.md).
