@@ -54,19 +54,24 @@
 - Proper `speed` field plumbing through `TTSBackend` Protocol → v0.3
 - Voice-mixing tensor blending → v0.3+
 
-## v0.3.0 — production hardening (planned)
+## v0.3.0 — production hardening (mostly SHIPPED 2026-05-25)
 
 **Goal:** Make voice-forge safe to expose beyond `127.0.0.1` and easy for outside users to deploy.
 
-- [ ] **Bearer-token auth** — `Authorization: Bearer <token>` for REST, first-frame token for WS — see [QUEUED](engineering-journal/QUEUED.md) § "OpenAI-API-compatible authentication"
-- [ ] **Observability** — `GET /metrics` Prometheus endpoint (synth latency p50/p95, backends loaded, per-voice request counters)
-- [ ] **WS layer-2 pipelining** — synth sentence N+1 while sending sentence N (task #21)
+- [x] **Quickstart tutorial** — `docs/QUICKSTART.md` (commit `74a4a9b`)
+- [x] **Pre-commit hooks + bandit** — ruff/black/mypy/bandit in CI + locally (commit `98bb395`)
+- [x] **Observability — Prometheus `/metrics`** — six core metrics (synth_seconds histogram, synth_requests_total, backend_loaded, voices_registered, active_ws_connections, ws_sentences_total) (commit `22432bd`)
+- [x] **Subprocess-isolated backend pattern** — HTTP-shim IPC; per-backend venvs at `~/.voice-forge/backends/<name>/.venv/` (commit pending)
+- [x] **Piper backend** — GPL-3 isolated via subprocess pattern (commit pending)
+- [x] **Chatterbox-Turbo backend** — hostile-pin isolated via subprocess pattern (commit pending)
+- [x] **MeloTTS backend** — MIT multilingual presets, subprocess-isolated (commit pending)
+- [x] **Demo UX rebuild** — persona + model split dropdowns + conditional per-backend knob panel (commit `9a0c544`)
+- [x] **`voice-forge backend install <name>` CLI** — provisions per-backend venvs (commit pending)
+- [ ] **Bearer-token auth** — DEFERRED 2026-05-25 pending a token-issuance story; see [QUEUED](engineering-journal/QUEUED.md) § "OpenAI-API-compatible authentication"
+- [ ] **WS layer-2 pipelining** — synth sentence N+1 while sending sentence N (task #21, ~half-day win)
 - [ ] **F5 accent retention tuning** — `cfg_strength` per-voice experimentation (task #20)
-- [ ] **Piper backend** (subprocess-call wrapper; GPL-3 safe; 30+ languages) — depends on the subprocess-isolated backend pattern (task #15)
-- [ ] **Subprocess-isolated backend pattern** (task #15) — unblocks Chatterbox + Piper; backends with hostile dep pins live in their own venvs
 - [ ] **Wyoming protocol adapter** (Home Assistant integration)
 - [ ] **Hermes-agent integration** to actually consume streaming end-to-end — task #23, work is in `infiquetra/home-lab`, not voice-forge
-- [ ] Pre-commit hooks (ruff, mypy, bandit, black) — was deferred from v0.2
 
 ## v0.4.0 — distributed + multi-tenant
 

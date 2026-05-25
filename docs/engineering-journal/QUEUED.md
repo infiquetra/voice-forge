@@ -30,7 +30,14 @@
 
 ---
 
-## P1 — Subprocess-isolated backend pattern (architectural)
+## ~~P1 — Subprocess-isolated backend pattern (architectural)~~ SHIPPED 2026-05-25
+
+> Moved to ARCHIVE.md as SHIPPED. Pattern lives at
+> `src/voice_forge/backends/_subprocess.py` + `subprocess_shim.py`.
+> Piper, Chatterbox, MeloTTS backends sit on this. See LEARNINGS 2026-05-25
+> § "Subprocess-isolated backends with HTTP-shim IPC".
+
+## P1 — (placeholder; previously: subprocess pattern, now shipped)
 
 **Priority.** P1 — unblocks at least two backend candidates we can't ship without it (Chatterbox, Piper).
 

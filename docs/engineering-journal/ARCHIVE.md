@@ -9,6 +9,34 @@
 
 ---
 
+## SHIPPED 2026-05-25 — v0.3 hardening + 3 new subprocess-isolated backends + demo UX rebuild
+
+**From QUEUED:** P1 subprocess-isolated backend pattern; P2 per-voice tunable sampling; P2 streaming layer-2 (WS); P3 Pre-commit + bandit; P3 OpenAI-API auth (deferred — see QUEUED).
+**From v0.3 ROADMAP:** quickstart guide; Prometheus /metrics; subprocess pattern; Piper / Chatterbox / MeloTTS backends.
+
+**What shipped (commit chain on `worktree-v0.2-pluggable-proof`):**
+
+1. **Pre-commit + bandit + CI** (commit `98bb395`) — ruff, black, mypy strict, bandit -ll, end-of-file + trailing-whitespace + check-yaml + check-toml + check-merge-conflict + check-added-large-files. Bandit's existing medium-severity findings fixed (B310 url scheme guard, B108 tempfile.gettempdir, B615 HF revision pin suppressed + queued).
+2. **Quickstart tutorial** (commit `74a4a9b`) — `docs/QUICKSTART.md`, an eight-step path from `pip install` to "you can hear it streaming in the browser".
+3. **Persona field on VoiceRef + KNOWN_TUNABLES schemas + GET /v1/backends** (commit `6140174`) — every backend declares its sampling knobs; the REST surface advertises the full schema.
+4. **Demo UX rebuild** (commit `9a0c544`) — two-dropdown picker (persona + model); conditional knob panel rendered from `KNOWN_TUNABLES`; request-scope sampling overrides over the WS handshake. Server's `ws_tts_stream` clones the `VoiceRef` + merges overrides without mutating the registry's cached entry.
+5. **Prometheus /metrics endpoint** (commit `22432bd`) — six metrics: synth_seconds (histogram), synth_requests_total, backend_loaded, voices_registered, active_ws_connections, ws_sentences_total. Histogram buckets calibrated to actual observed synth times (0.25s → 128s).
+6. **SubprocessBackend HTTP-shim pattern** (commit pending) — base class + child shim entrypoint + 10 lifecycle tests with a real-but-fake child. See LEARNINGS 2026-05-25 for design rationale.
+7. **Piper + Chatterbox + MeloTTS subprocess backends** (commit pending) — each is a thin subclass + an env-var-gated in-process implementation. `voice-forge backend install <name>` provisions the per-backend venv.
+
+**Bearer-token auth (item B) was explicitly DEFERRED** — see QUEUED entry "OpenAI-API-compatible authentication". The wiring is half a day; what's missing is a token-issuance story. Re-engages when we have that.
+
+**Tests:** 213/213 passing. Coverage of the new surface: 10 subprocess-lifecycle tests, 2 metrics tests, 2 persona/tunables tests, 1 request-scope sampling test, 1 demo-page test.
+
+**Acceptance criteria met:**
+- pre-commit hooks block bad commits locally + in CI
+- `/demo` page works in a browser with persona/model split + conditional knobs
+- `/metrics` returns Prometheus exposition with all 6 core metrics
+- `voice-forge backend install piper` creates a working subprocess venv (smoke-tested fixture only — real install requires user-side network + disk)
+- All 8 backends visible in `/v1/backends` with their tunable schemas
+
+---
+
 ## REJECTED 2026-05-25 — VibeVoice backend (Microsoft pulled the model)
 
 **From QUEUED P2:** "VibeVoice backend (long-form narrative quality)"
