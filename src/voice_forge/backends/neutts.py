@@ -66,7 +66,10 @@ def _apply_neutts_patches(n_ctx: int, repeat_penalty: float) -> None:
             return _original_llama_call(self, *args, **kwargs)
 
         _patched_llama_call._voice_forge_patched = True  # type: ignore[attr-defined]
-        Llama.__call__ = _patched_llama_call
+        # Intentional monkey-patch of a method on the imported class — this is
+        # how llama_cpp ends up honoring repeat_penalty in BOTH batch and stream
+        # paths (NeuTTS's _infer_stream_ggml omits the kwarg natively).
+        Llama.__call__ = _patched_llama_call  # type: ignore[method-assign]
 
 
 def _chunk_text(text: str, max_chars: int) -> list[str]:
@@ -75,8 +78,14 @@ def _chunk_text(text: str, max_chars: int) -> list[str]:
     Sentences are detected by ``.!?`` followed by whitespace. A single
     sentence longer than max_chars goes into its own chunk (we don't
     split mid-sentence — that causes cloning quality drift).
+
+    Empty/whitespace-only input returns ``[]`` rather than ``[""]`` —
+    callers don't waste an inference pass on nothing.
     """
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    stripped = text.strip()
+    if not stripped:
+        return []
+    sentences = re.split(r"(?<=[.!?])\s+", stripped)
     chunks: list[str] = []
     current: list[str] = []
     current_len = 0

@@ -1,0 +1,45 @@
+# Cross-backend comparison fleet: 3 sister-text rows × 2 backends each.
+#
+# Each ID matches a key in responses.yaml so the Kokoro rows read the SAME
+# text as their NeuTTS counterpart — apples-to-apples comparison on identical
+# words.
+#
+# voice_id values distinguish the backend: `*-comms/*-research/*-books` are
+# the NeuTTS sister clones (registered with ref WAVs from home-lab),
+# `kokoro-*` are the preset-voice rows.
+
+- id: saga
+  display_name: "Saga · NeuTTS clone"
+  voice_id: saga-comms
+  backend: neutts
+  target_agent: Loki
+
+- id: saga
+  display_name: "Saga's text · Kokoro af_bella"
+  voice_id: kokoro-bella
+  backend: kokoro
+  target_agent: Loki
+
+- id: heid
+  display_name: "Heid · NeuTTS clone"
+  voice_id: heid-research
+  backend: neutts
+  target_agent: Bragi
+
+- id: heid
+  display_name: "Heid's text · Kokoro af_nicole"
+  voice_id: kokoro-nicole
+  backend: kokoro
+  target_agent: Bragi
+
+- id: hnoss
+  display_name: "Hnoss · NeuTTS clone"
+  voice_id: hnoss-books
+  backend: neutts
+  target_agent: Heimdall
+
+- id: hnoss
+  display_name: "Hnoss's text · Kokoro af_heart"
+  voice_id: kokoro-heart
+  backend: kokoro
+  target_agent: Heimdall

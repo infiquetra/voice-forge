@@ -194,9 +194,20 @@ def voice() -> None:
 
 @voice.command("add")
 @click.argument("voice_id")
-@click.argument("ref_audio_path", type=click.Path(exists=True, dir_okay=False))
+@click.argument(
+    "ref_audio_path",
+    required=False,
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+)
 @click.option(
     "--ref-text", default=None, help="Matching transcript (will Whisper-transcribe if absent)"
+)
+@click.option(
+    "--preset",
+    "preset_id",
+    default=None,
+    help="Preset voice name for backends that don't use ref audio (e.g. kokoro 'af_bella')",
 )
 @click.option("--backend", default="neutts", show_default=True)
 @click.option("--language", default="en", show_default=True)
@@ -204,24 +215,42 @@ def voice() -> None:
 @click.option("--overwrite", is_flag=True, help="Replace existing voice with same id")
 def voice_add(
     voice_id: str,
-    ref_audio_path: str,
+    ref_audio_path: str | None,
     ref_text: str | None,
+    preset_id: str | None,
     backend: str,
     language: str,
     description: str,
     overwrite: bool,
 ) -> None:
-    """Add a voice from a local WAV file."""
+    """Add a voice — from a ref WAV (cloning backends) OR a --preset name (preset backends)."""
     from .registry import Registry
 
-    if ref_text is None:
+    if not ref_audio_path and not preset_id:
+        click.echo(
+            "error: provide either REF_AUDIO_PATH (for cloning backends like neutts) "
+            "or --preset <name> (for preset backends like kokoro).",
+            err=True,
+        )
+        sys.exit(2)
+    if ref_audio_path and preset_id:
+        click.echo(
+            "error: REF_AUDIO_PATH and --preset are mutually exclusive — pick one.",
+            err=True,
+        )
+        sys.exit(2)
+
+    metadata: dict = {"language": language, "description": description}
+    if preset_id:
+        metadata["preset_id"] = preset_id
+
+    if ref_audio_path and ref_text is None:
         click.echo("Whisper-transcribing ref audio (forced language=en)...", err=True)
         from .voice_lab.whisper import transcribe
 
         ref_text = transcribe(ref_audio_path, language=language)
         click.echo(f"  transcript: {ref_text!r}", err=True)
 
-    metadata = {"language": language, "description": description}
     registry = Registry()
     try:
         ref = registry.register(
@@ -235,7 +264,8 @@ def voice_add(
     except FileExistsError as exc:
         click.echo(f"error: {exc}. Re-run with --overwrite to replace.", err=True)
         sys.exit(1)
-    click.echo(f"registered {ref.voice_id} (backend={ref.backend})")
+    suffix = f" preset={preset_id!r}" if preset_id else ""
+    click.echo(f"registered {ref.voice_id} (backend={ref.backend}){suffix}")
 
 
 @voice.command("from-elevenlabs")
