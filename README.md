@@ -74,6 +74,8 @@ curl http://127.0.0.1:9876/v1/audio/speech \
 # See docs/API_SPEC.md § "WS /v1/tts/stream" for the wire protocol.
 ```
 
+**New here?** → [`docs/QUICKSTART.md`](docs/QUICKSTART.md) — five minutes from `pip install` to hearing a voice.
+
 ## Status
 
 **v0.2.0 — SHIPPED 2026-05-25.**
