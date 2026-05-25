@@ -204,7 +204,7 @@ Ideal end state: when you audition a sister and it sounds wrong, you tweak her m
 
 ---
 
-## P2 — WebSocket bidirectional streaming (`WS /tts/stream`)
+## P2 — WebSocket bidirectional streaming (`WS /tts/stream`) — layer 2 of streaming
 
 **Priority.** P2 — adds value for chat / real-time use cases.
 
@@ -212,7 +212,19 @@ Ideal end state: when you audition a sister and it sounds wrong, you tweak her m
 
 **Worth it when.** v0.2.0 milestone OR a real-time use case needs progressive synthesis with text-arriving-in-chunks (live transcription → live synthesis pipelines).
 
-**Context.** Wyoming protocol demonstrates the value of bidirectional streaming (lower perceived latency for incremental input). FastAPI has WebSocket built-in.
+**Context.** Layer 1 (sentence-chunked HTTP `StreamingResponse`) shipped in commit `5c144c8` and proved its win on F5 long-form (10.6× first-audio improvement on a ~995-char narrative — see `LEARNINGS.md` 2026-05-25). Layer 2 is the bidirectional WebSocket: text *arrives* in chunks (live transcription, LLM token-stream), synth begins as soon as the first sentence boundary is buffered, audio streams back. FastAPI has WebSocket built-in. Wyoming protocol is the obvious reference shape.
+
+---
+
+## P2 — Lift torch 2.8 pin in F5 extra when upstream resolves the torchcodec ABI gap
+
+**Priority.** P2 — tracking item, not urgent.
+
+**Effort.** ~30 min (bump pin, re-run audition, verify F5 still works).
+
+**Worth it when.** A torch 2.9.x release (or a torchcodec 0.14+) ships that exports / no-longer-references `_aoti_torch_aten_subtract_Tensor`. Watch torchcodec's GitHub Releases page; the compatibility table at https://github.com/pytorch/torchcodec is the authoritative source.
+
+**Context.** `pyproject.toml`'s `f5` extra currently pins `torch>=2.8,<2.9 + torchaudio>=2.8,<2.9 + torchcodec>=0.7,<0.8` because torch 2.9.x + torchcodec 0.13.0 ships a binary mismatch on macOS arm64 (see `LEARNINGS.md` 2026-05-25 "Torch 2.9.x + torchcodec 0.13.0 ABI gap"). Pin is temporary — lift when upstream is honest.
 
 ---
 

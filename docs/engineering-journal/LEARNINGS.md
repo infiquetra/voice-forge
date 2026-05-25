@@ -27,6 +27,63 @@
 
 ## 2026-05-25
 
+### Sentence-chunked synthesize_stream gives 10× first-audio win on F5 long-form
+
+**Context.** F5-TTS's public API is `infer(ref_file, ref_text, gen_text)` which returns the *complete* waveform; the library exposes no per-token / per-chunk streaming hook. The v0.1 `synthesize_stream` for F5 was batch-with-extra-steps — it just ran `infer()` once and yielded the whole result, so streaming clients got no latency benefit over batch.
+
+**Evidence.** Audition harness `scripts/asgard_audition.py --mode both` against `saga-comms-f5` (commit `282e84c`), with the voice tuned via `voice-forge voice tune saga-comms-f5 --sampling stream_chunk_chars=200`:
+
+| Prompt | Text size | Batch first-audio | Stream first-audio | Speedup |
+|---|---|---|---|---|
+| p1 "Can you hear me?" | 17 chars | 16.4 s | 3.5 s | 4.7× *(F5 cold-load skew)* |
+| p2 self-intro | ~297 chars | 19.6 s | 7.2 s | 2.7× |
+| p3 narrative | ~995 chars | 62.8 s | 5.9 s | **10.6×** |
+
+Index: `tests/functional/output/streaming-f5-tuned-20260525T132057Z/index.html`.
+
+**Mechanism.** F5's `infer()` blocks until the *full* utterance is generated, then returns. The chunker (`src/voice_forge/backends/_chunking.py:chunk_text`) splits the input on sentence boundaries; `F5Backend.synthesize_stream()` then calls `infer()` per chunk and yields each PCM buffer as soon as the chunk is done. With 200-char chunks the 995-char p3 splits into ~5 chunks; first chunk completes in ~5.9 s instead of waiting for all 60+ seconds of synth. Each chunk runs through the same per-voice sampling code path as batch, so quality is preserved — content hashes are identical modulo a small per-chunk crossfade delta (≈7 kB on a 1.25 MB synth).
+
+**Caveats baked into the result.**
+
+1. **Quality vs latency tradeoff.** Smaller `stream_chunk_chars` = lower first-audio latency but each chunk has less context for F5's diffusion. The 200-char setting in the demo is aggressive; the backend's `DEFAULT_STREAM_CHUNK_CHARS=1000` favors quality. Tune per voice via metadata sampling block; don't drop the default.
+
+2. **No magic on single-chunk text.** If the whole input fits in one chunk, stream and batch take identical paths. Saga's p2 (297 chars) under the *default* 1000 ceiling collapses to one chunk → first-audio matches batch. That's the "F5 looks unchanged" row in the first audition (`streaming-ab-20260525T131647Z/index.html`).
+
+3. **Cold-load skews short-text rows.** p1 stream looks 4.7× faster than batch but the first synth call also pays F5's lazy-init cost — that confounds the measurement on a single short call.
+
+**Generalizable rule.** When a backend has no native streaming hook but the API can be called on substrings, sentence-chunking the input is the cheapest streaming layer — pure Python, no model changes — and the win scales with text length. Default chunk size should favor quality; expose it as a per-voice tunable so latency-sensitive callers can drop it for that voice without touching the backend default.
+
+**Refs.** Commit `5c144c8` (chunker + per-backend wiring), `282e84c` (audition fleets + deps pin). QUEUED.md → "WebSocket bidirectional streaming (layer 2)" still pending.
+
+---
+
+### Torch 2.9.x + torchcodec 0.13.0 ABI gap silently broke F5 on macOS
+
+**Context.** torchaudio 2.9 removed the soundfile-backed `load()` path and now hard-routes every WAV read through `load_with_torchcodec()`. torchcodec 0.13.0 ships per-FFmpeg-major-version shim libraries that link against `libtorch_cpu`. On torch 2.9.x macOS arm64, `libtorchcodec_core8.dylib` references the symbol `_aoti_torch_aten_subtract_Tensor` which is not exported from the corresponding `libtorch_cpu.dylib`. Every `torchaudio.load()` call dies at dlopen with `Symbol not found`.
+
+**Evidence.** Reproduced today (2026-05-25) at server stderr capture `$CLAUDE_JOB_DIR/srv-stderr.log`:
+
+```
+OSError: dlopen(.../torchcodec/libtorchcodec_core8.dylib):
+  Symbol not found: _aoti_torch_aten_subtract_Tensor
+  Referenced from: libtorchcodec_core8.dylib
+  Expected in: torch/lib/libtorch_cpu.dylib
+```
+
+Surfaces user-side as `HTTP 500 Internal Server Error` on the very first `POST /v1/audio/speech` for any F5 voice. NeuTTS / Kokoro / Dia / XTTS unaffected — they don't reach into `torchaudio.load()`.
+
+**Mechanism.** torchcodec was built against a torch HEAD that exported `_aoti_torch_aten_subtract_Tensor`; the published torch 2.9.0/2.9.1 wheels don't export it. Result: an undeclared binary contract between two upstream packages that both `f5-tts` (and therefore voice-forge) silently depend on.
+
+**Fix.** `pyproject.toml` F5 extra now pins the last verified-working trio: `torch>=2.8,<2.9`, `torchaudio>=2.8,<2.9`, `torchcodec>=0.7,<0.8`. torchaudio 2.8 still has the soundfile fallback so even the broken torchcodec build wouldn't fire. Commit `282e84c`.
+
+**Validation.** Post-pin, `python -c "import torchaudio, glob; torchaudio.load(glob.glob('.audition-registry/*/ref.wav')[0])"` succeeds; audition harness completes 12/12 + 6/6 rows.
+
+**Generalizable rule.** When a transitive dependency carries unannotated binary contracts to its peers (here: torchcodec ↔ torch's libtorch_cpu), pinning the *triple* (or whatever closure of co-built packages applies) is the only honest fix. The wheel resolver doesn't enforce ABI; it'll happily install incompatible versions whose import-time error message blames everything except the actual contract gap.
+
+**Refs.** [torchcodec compatibility table](https://github.com/pytorch/torchcodec?tab=readme-ov-file#installing-torchcodec). QUEUED.md → P2 "Lift torch 2.8 pin when upstream resolves the symbol gap."
+
+---
+
 ### Fish Audio S2 Pro deferred — integration cost too high for predicted-similar quality
 
 **Context.** Seventh backend candidate considered. Fish Audio S2 Pro (fishaudio/fish-speech, 4B params, Dual-AR architecture, decoder-only transformer with SGLang streaming, 80+ languages, inline emotion tags). PRIOR_ART originally marked it Apache-2; verifying 2026-05-25 turned up the actual license: **Fish Audio Research License** — non-commercial only, commercial requires paid license.
