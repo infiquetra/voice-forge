@@ -44,6 +44,16 @@ jobs:
           source .venv/bin/activate
           mypy src
 
+      - name: Security scan with bandit
+        run: |
+          source .venv/bin/activate
+          bandit -ll -c pyproject.toml -r src/
+
+      - name: Pre-commit hooks (catches anything not in the named gates above)
+        run: |
+          source .venv/bin/activate
+          pre-commit run --all-files --show-diff-on-failure
+
       - name: Run tests
         run: |
           source .venv/bin/activate

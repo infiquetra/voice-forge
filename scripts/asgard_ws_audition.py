@@ -205,7 +205,7 @@ async def _stream_one_row(
         try:
             while True:
                 msg = await ws.recv()
-                if isinstance(msg, (bytes, bytearray)):
+                if isinstance(msg, bytes | bytearray):
                     if timings["first_audio_received_ms"] is None:
                         timings["first_audio_received_ms"] = (time.monotonic() - connect_t0) * 1000
                     pcm_frames.append(np.frombuffer(msg, dtype=np.float32))

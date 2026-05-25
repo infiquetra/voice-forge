@@ -88,6 +88,8 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "black>=24.0",
+    "bandit>=1.7",
+    "pre-commit>=3.7",
 ]
 
 [project.scripts]
@@ -158,3 +160,19 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+
+[tool.bandit]
+# Files / paths bandit shouldn't scan. Tests + scripts intentionally use
+# patterns (assert, subprocess, tempfile) that would noise up the report
+# without finding real production issues.
+exclude_dirs = ["tests", "scripts", ".venv", ".audition-registry", "docs", "_porting"]
+
+# Skips:
+#   B101 - assert_used: pytest uses assert; tests are excluded but stubs
+#          inside src/voice_forge/backends/_subprocess.py and similar may
+#          legitimately use assert as type-narrow guards
+#   B404 - import_subprocess: we use subprocess intentionally (FFmpeg shell-out,
+#          voice-forge serve auto-launch in tests, future subprocess pattern
+#          for hostile-dep backends). Track real subprocess.run() risks via
+#          B603 / B607 instead.
+skips = ["B101", "B404"]

@@ -85,6 +85,23 @@ curl http://127.0.0.1:9876/v1/audio/speech \
 - **Release notes:** [`docs/engineering-journal/ARCHIVE.md`](docs/engineering-journal/ARCHIVE.md) is the changelog
 - **What's next:** see [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/engineering-journal/QUEUED.md`](docs/engineering-journal/QUEUED.md)
 
+## Contributing
+
+```bash
+# Set up dev env
+uv venv && source .venv/bin/activate
+uv pip install -e ".[dev,f5,kokoro,voice-lab]"
+
+# Install pre-commit hooks (one-time)
+pre-commit install
+
+# Run the full gate suite locally — same checks CI runs
+pre-commit run --all-files     # ruff + black + mypy + bandit + standard hygiene
+pytest tests/ -v               # 198+ tests
+```
+
+CI runs the same gates on every PR; locally-passing pre-commit is the contract.
+
 ## Context for new contributors
 
 If you're starting fresh on this repo, the engineering journal at [`docs/engineering-journal/`](docs/engineering-journal/) is the read-this-first place. It contains:

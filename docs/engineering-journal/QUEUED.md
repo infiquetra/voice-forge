@@ -257,7 +257,15 @@ Ideal end state: when you audition a sister and it sounds wrong, you tweak her m
 
 ---
 
-## P3 — NeuTTS streaming content-loss investigation
+## P3 — Pin HuggingFace model revisions across backends
+
+**Priority.** P3 — supply-chain hardening; not urgent until we see a real signed-model story we want to participate in.
+
+**Effort.** ~2 hours per backend (5 backends × ~10 min each to find the right commit + write the revision pin + verify it still works).
+
+**Worth it when.** voice-forge runs on hosts where we can't audit the HF Hub state, OR an attacker-uploaded model becomes a real concern in a deploy context, OR HF rolls out reproducible-build attestations we want to anchor on.
+
+**Context.** Bandit B615 flags any `from_pretrained(model_name)` call without a `revision=` kwarg, because unpinned downloads silently follow whatever HEAD the model's repo points at. Currently suppressed inline (`# nosec B615`) on `dia.py:146-147`; F5 / XTTS / Kokoro / NeuTTS use the lib's internal HF download which doesn't trigger bandit at our `-ll` level but has the same risk shape. Right fix: each backend's `load()` accepts an optional `revision: str | None = "<known-good-commit-sha>"` config field; default to a pinned SHA, allow override for testing newer revisions. Validation: pin to current SHA + verify model loads identically.
 
 **Priority.** P3 — blocks flipping streaming-default to true.
 

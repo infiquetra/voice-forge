@@ -143,8 +143,14 @@ class DiaBackend:
             "top_k": int(config.get("top_k", DEFAULT_TOP_K)),
         }
         logger.info("loading Dia(model=%r, device=%r)", model_name, device)
-        self._processor = AutoProcessor.from_pretrained(model_name)
-        self._model = DiaForConditionalGeneration.from_pretrained(model_name).to(device)
+        # nosec B615 — model revision pin is queued under "Pin HF model revisions
+        # across backends" in engineering-journal/QUEUED.md. Suppressing the
+        # bandit finding individually keeps the rule active on any *new*
+        # from_pretrained() call we add.
+        self._processor = AutoProcessor.from_pretrained(model_name)  # nosec B615
+        self._model = DiaForConditionalGeneration.from_pretrained(model_name).to(  # nosec B615
+            device
+        )
 
     def encode_reference(self, ref_audio_path: str) -> list | None:
         """Dia encodes audio prompts internally; no pre-encode hook exposed."""

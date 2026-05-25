@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import time
 import wave
 from pathlib import Path
@@ -139,7 +140,9 @@ def synth(voice_id: str, text: str, out_path: str | None) -> None:
     click.echo(f"  loaded in {time.time() - t_load:.2f}s", err=True)
 
     if out_path is None:
-        out_path = f"/tmp/voice_forge_{voice_id}_{int(time.time())}.wav"
+        out_path = str(
+            Path(tempfile.gettempdir()) / f"voice_forge_{voice_id}_{int(time.time())}.wav"
+        )
     out = Path(out_path).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
 
