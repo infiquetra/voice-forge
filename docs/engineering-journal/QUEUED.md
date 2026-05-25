@@ -85,18 +85,6 @@ Ideal end state: when you audition a sister and it sounds wrong, you tweak her m
 
 ---
 
-## P2 — VibeVoice backend (long-form narrative quality)
-
-**Priority.** P2 — directly addresses NeuTTS-Air's "incoherence on >30s narrative" limit.
-
-**Effort.** ~4-6 hours pending license verification.
-
-**Worth it when.** Long-form use cases matter (story-telling, briefings, podcasts).
-
-**Context.** Microsoft research model. Up to 90 minutes coherent multi-speaker audio with consistent voice identity. Low-frame-rate tokenizers + next-token diffusion. Streaming variant. License is research-stage — must verify before depending. Find: search `microsoft/VibeVoice`.
-
----
-
 ## P2 — Chatterbox-Turbo backend (sub-200ms latency)
 
 **Priority.** P2 — when first-byte latency dominates UX.

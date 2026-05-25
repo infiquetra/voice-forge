@@ -9,6 +9,61 @@
 
 ---
 
+## REJECTED 2026-05-25 — VibeVoice backend (Microsoft pulled the model)
+
+**From QUEUED P2:** "VibeVoice backend (long-form narrative quality)"
+**From ROADMAP v0.3:** "VibeVoice backend (if licensing checks out)"
+
+**Why rejected.** Microsoft removed `VibeVoice-TTS-1.5B` from the
+`microsoft/VibeVoice` public repository in September 2025, citing
+"instances where the tool was used in ways inconsistent with the stated
+intent" (deepfake misuse). The 1.5B TTS model with cloning + long-form
+multi-speaker coherence — the variant voice-forge would have wanted —
+**is no longer obtainable from upstream**. Even if weights could be found
+mirrored elsewhere, depending on a deliberately-withdrawn model is the
+wrong move for a downstream library.
+
+**What's still available from the VibeVoice family (and why it doesn't
+fit voice-forge's mission):**
+- **VibeVoice-Realtime-0.5B**: Streaming + 10-minute long-form context.
+  MIT code, available on HF. **But preset voices only** — Microsoft
+  explicitly designed it with "voice prompts in embedded format" to
+  prevent cloning misuse. ~11 English + 9 multilingual stock voices.
+  Could be added as a "Kokoro with streaming" preset backend, but
+  doesn't address voice-forge's core use case (cloning the Asgard
+  fleet's personas).
+- **VibeVoice-ASR-7B**: Speech recognition, not synthesis. Out of scope
+  for voice-forge entirely — that's `infiquetra/voice-listen` territory.
+
+**What replaces VibeVoice in the long-form-cloning niche.**
+**F5-TTS** (shipped in v0.2 commit `60db36a`) closes the same gap:
+clean cloning + no 30-second cliff. The v0.2 audition shows F5 reading
+71-86 s coherently with the Asgard sister refs (Saga + Hnoss held;
+Heid drifted, traced to a ref-WAV issue and not a backend problem).
+F5 is MIT-wrapper + Apache-2 weights — no withdrawal risk.
+
+**Revisit-when.** If Microsoft releases a non-clone-capable but
+streaming preset model (VibeVoice-Realtime expansion) we like better
+than Kokoro, **and** voice-forge needs streaming-text-during-synth
+behavior we can't get from Kokoro's per-segment yielding. Until then,
+no further evaluation effort spent on the VibeVoice line.
+
+**Generalizable rule.** **Track "backend candidate" status against
+upstream availability, not just license + capability.** A model that
+WAS shipped + accessible can become unavailable. The audition
+infrastructure can't help us reach a model the original publisher
+has withdrawn. PRIOR_ART.md gets a hygiene pass: every candidate
+needs a "still actively published" check column, not just license.
+
+**Refs.** Microsoft's official statement on the removal is in the
+`microsoft/VibeVoice` README dated 2025-09-05 ("we have removed the
+VibeVoice-TTS code from this repository"). Upstream URLs:
+- https://github.com/microsoft/VibeVoice — repo (now ASR + Realtime only)
+- https://huggingface.co/microsoft/VibeVoice-Realtime-0.5B — the
+  preset-only streaming variant that survived
+
+---
+
 ## SHIPPED 2026-05-25 — v0.2: Dia-1.6B backend (Nari Labs, multi-speaker + cloning, Apache-2)
 
 **Commit:** (this commit; latest on the `worktree-v0.2-pluggable-proof` branch)

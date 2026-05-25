@@ -18,7 +18,7 @@
 | MeloTTS | MIT | ✓ clean | OK |
 | Chatterbox | MIT | ✓ clean | OK |
 | Fish Audio S2 Pro | Apache 2.0 | ✓ clean | OK |
-| VibeVoice (Microsoft) | Research-stage | ⚠ unclear | Need to verify before depending |
+| ~~VibeVoice (Microsoft)~~ | ~~Research-stage~~ | ⛔ REJECTED 2026-05-25 | MS removed VibeVoice-TTS-1.5B from the repo. See ARCHIVE.md. |
 
 ## Project-by-project review
 
@@ -131,7 +131,7 @@ Eight built-in voice presets, indexed by voice_id (not ref WAV).
 
 These weren't in the original Phase B candidate list but appear worth tracking for ROADMAP.md:
 
-1. **VibeVoice (Microsoft)** — Long-form expressive TTS, up to 90 min coherent multi-speaker audio with consistent voice identity. Low-frame-rate tokenizers (7.5 Hz) + next-token diffusion. Streaming variant. **Directly addresses our NeuTTS-Air "long narrative gibberish" problem.** License is research-stage; verify before depending. Find: search `microsoft/VibeVoice` on GitHub.
+1. ~~**VibeVoice (Microsoft)**~~ — **REJECTED 2026-05-25**. Microsoft removed VibeVoice-TTS-1.5B from the public repo in Sept 2025 ("used in ways inconsistent with stated intent"). The remaining VibeVoice-Realtime-0.5B is preset-only (voices shipped as embedded format, no runtime cloning). See ARCHIVE.md for the full rejection rationale.
 
 2. **Fish Audio S2 Pro** — Decoder-only transformer, 80+ languages, voice cloning. Dual-AR (4B slow + 400M fast). SGLang-based streaming. Apache 2.0. Find: `fish-audio/fish-audio`.
 

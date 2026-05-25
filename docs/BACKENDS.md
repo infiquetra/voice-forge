@@ -6,7 +6,7 @@ This is the reference for the TTS backends that voice-forge knows how to drive. 
 2. "What does it cost to add this backend to my deployment host?"
 3. "How does this backend differ from the others architecturally?"
 
-For the abstraction itself — the `TTSBackend` Protocol, the `VoiceRef` union dataclass, the registry, the dispatch path — see [`docs/ARCHITECTURE.md`](ARCHITECTURE.md). For the broader landscape of self-hosted TTS engines (Coqui, F5, XTTS, Dia, Kitten, VibeVoice, etc.) see [`docs/PRIOR_ART.md`](PRIOR_ART.md).
+For the abstraction itself — the `TTSBackend` Protocol, the `VoiceRef` union dataclass, the registry, the dispatch path — see [`docs/ARCHITECTURE.md`](ARCHITECTURE.md). For the broader landscape of self-hosted TTS engines (Coqui, F5, XTTS, Dia, Kitten, etc.) see [`docs/PRIOR_ART.md`](PRIOR_ART.md).
 
 ## At a glance — what ships in v0.2
 
@@ -72,7 +72,7 @@ Numbers measured 2026-05-24 / 2026-05-25 on a Mac Studio M2 Ultra. F5 cold-load 
 
 ### NeuTTS quirks worth knowing
 
-- **30-second narrative coherence cliff.** Long utterances (>30 s) drift, lose words, or produce repeated tokens. The v0.2 audition produced 41-69 s rows that demonstrated this audibly. Not a hard cutoff — Freya's clone went 35.9 s cleanly on one run — but unreliable past ~30 s. Tracked in [QUEUED.md](engineering-journal/QUEUED.md) under "VibeVoice backend (long-form quality)".
+- **30-second narrative coherence cliff.** Long utterances (>30 s) drift, lose words, or produce repeated tokens. The v0.2 audition produced 41-69 s rows that demonstrated this audibly. Not a hard cutoff — Freya's clone went 35.9 s cleanly on one run — but unreliable past ~30 s. F5-TTS (shipped in v0.2) is the replacement candidate that closes this gap with cloning intact.
 - **Three monkey-patches** are applied in `_apply_neutts_patches`: `n_ctx=8192` (upstream hardcodes 2048), `repeat_penalty=1.05` injection on `Llama.__call__` (upstream omits this on the streaming path, causing ~15% content drop), and `tts.watermarker = None` (the Perth implicit watermarker introduces per-chunk audible clicks at streaming boundaries). All documented in `src/voice_forge/backends/neutts.py:_apply_neutts_patches` with reasoning.
 - **Short-utterance sampling can collapse on specific voice/text combos.** The audition reproducibly produced 0.16 s of "audio" for `heid-research` × "Can you hear me?" — NeuTTS sampled stop tokens immediately. Other sisters with similar refs produced 1-3 s of intelligible audio. Worth a follow-up investigation (suggested mitigations: longer prompts, temperature bump for utterances < 10 chars, or a retry-with-stochasticity loop).
 
@@ -223,7 +223,6 @@ These live in [`docs/engineering-journal/QUEUED.md`](engineering-journal/QUEUED.
 | F5-TTS | Higher quality cloning than NeuTTS; Apache-2 | GPU required for usable RTF |
 | XTTS-v2 (Coqui) | Multilingual + voice cloning; MPL-2 | GPU; project officially discontinued (forks exist) |
 | Dia | Multi-speaker dialogue (`[S1]`/`[S2]` tags); Apache-2; **first community wrapper opportunity** | 10 GB VRAM mandatory |
-| VibeVoice (Microsoft) | Long-form coherence — up to 90 min multi-speaker | Research-stage license; verify before depending |
 | Kitten | Smallest model (15-80M); ONNX; CPU-only; Apache-2 | None — straightforward port |
 | MeloTTS | Multilingual + CPU-friendly; MIT | None — straightforward port |
 | Chatterbox-Turbo | Sub-200 ms first-token; MIT | None — straightforward port |
