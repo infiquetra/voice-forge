@@ -63,15 +63,15 @@ class FakeTTS:
         split_sentences: bool = True,
         **kwargs,
     ):
-        """Return a 0.5s silence array at 24kHz."""
-        self.calls.append(
-            {
-                "text": text,
-                "speaker_wav": speaker_wav,
-                "language": language,
-                "split_sentences": split_sentences,
-            }
-        )
+        """Return a 0.5s silence array at 24kHz; records all kwargs for tests."""
+        record = {
+            "text": text,
+            "speaker_wav": speaker_wav,
+            "language": language,
+            "split_sentences": split_sentences,
+        }
+        record.update(kwargs)  # capture per-voice sampling overrides
+        self.calls.append(record)
         return np.zeros(int(SAMPLE_RATE * 0.5), dtype=np.float32)
 
 

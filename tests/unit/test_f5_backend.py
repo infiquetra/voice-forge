@@ -126,3 +126,86 @@ def test_nfe_step_threads_through_to_infer(monkeypatch):
     backend.load({"nfe_step": 16})
     backend.synthesize("text", _voice_ref())
     assert backend._tts.calls[-1]["nfe_step"] == 16
+
+
+# ---- per-voice sampling overrides (QUEUED P2 feature) ----
+
+
+def test_voice_sampling_cfg_strength_threads_through(f5_backend):
+    """A per-voice cfg_strength override reaches F5TTS.infer."""
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"cfg_strength": 3.0}
+    f5_backend.synthesize("text", ref)
+    assert f5_backend._tts.calls[-1].get("cfg_strength") == 3.0
+
+
+def test_voice_sampling_seed_int_coerced(f5_backend):
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"seed": 42}
+    f5_backend.synthesize("text", ref)
+    assert f5_backend._tts.calls[-1].get("seed") == 42
+    assert isinstance(f5_backend._tts.calls[-1].get("seed"), int)
+
+
+def test_voice_sampling_nfe_step_overrides_load_default(f5_backend):
+    """Per-voice nfe_step beats the load-time default."""
+    # Loaded with default 32; voice overrides to 16
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"nfe_step": 16}
+    f5_backend.synthesize("text", ref)
+    assert f5_backend._tts.calls[-1]["nfe_step"] == 16
+
+
+def test_voice_sampling_speed_threads_through(f5_backend):
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"speed": 1.2}
+    f5_backend.synthesize("text", ref)
+    assert f5_backend._tts.calls[-1].get("speed") == 1.2
+
+
+def test_voice_sampling_remove_silence_bool(f5_backend):
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"remove_silence": True}
+    f5_backend.synthesize("text", ref)
+    assert f5_backend._tts.calls[-1].get("remove_silence") is True
+
+
+def test_voice_sampling_unknown_keys_ignored(f5_backend):
+    """Sampling keys F5 doesn't recognize are silently dropped (not forwarded)."""
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"max_new_tokens": 8192, "cfg_strength": 2.0}
+    # max_new_tokens belongs to Dia, not F5. F5 should accept cfg_strength only.
+    f5_backend.synthesize("text", ref)
+    last = f5_backend._tts.calls[-1]
+    assert last.get("cfg_strength") == 2.0
+    assert "max_new_tokens" not in last
+
+
+def test_voice_sampling_combined_keys(f5_backend):
+    """Multiple sampling overrides all thread through together."""
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {
+        "cfg_strength": 2.5,
+        "seed": 7,
+        "nfe_step": 20,
+        "speed": 1.1,
+    }
+    f5_backend.synthesize("text", ref)
+    last = f5_backend._tts.calls[-1]
+    assert last["cfg_strength"] == 2.5
+    assert last["seed"] == 7
+    assert last["nfe_step"] == 20
+    assert last["speed"] == 1.1
+
+
+def test_no_sampling_block_uses_backend_defaults(f5_backend):
+    """Voices without metadata['sampling'] get the backend's default nfe_step + no overrides."""
+    ref = _voice_ref()
+    # No sampling key in metadata
+    assert "sampling" not in ref.metadata
+    f5_backend.synthesize("text", ref)
+    last = f5_backend._tts.calls[-1]
+    assert last["nfe_step"] == 32  # backend default
+    # Optional sampling keys not present in the call
+    assert "cfg_strength" not in last
+    assert "seed" not in last

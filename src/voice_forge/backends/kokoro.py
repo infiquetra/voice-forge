@@ -85,10 +85,14 @@ class KokoroBackend:
         return None
 
     def synthesize(self, text: str, ref: VoiceRef) -> np.ndarray:
-        """Concatenate all audio chunks the pipeline yields into a single array."""
+        """Concatenate all audio chunks the pipeline yields into a single array.
+
+        Honors ``ref.metadata['sampling']['speed']`` per voice (default 1.0).
+        """
         voice = self._resolve_voice(ref)
+        speed = self._resolve_speed(ref)
         chunks: list[np.ndarray] = []
-        for _gs, _ps, audio in self._pipeline(text, voice=voice, speed=1.0):
+        for _gs, _ps, audio in self._pipeline(text, voice=voice, speed=speed):
             chunks.append(np.asarray(audio, dtype=np.float32))
         if not chunks:
             return np.zeros(0, dtype=np.float32)
@@ -97,8 +101,15 @@ class KokoroBackend:
     def synthesize_stream(self, text: str, ref: VoiceRef) -> Iterator[np.ndarray]:
         """Native streaming: ``KPipeline`` yields per-segment so we forward."""
         voice = self._resolve_voice(ref)
-        for _gs, _ps, audio in self._pipeline(text, voice=voice, speed=1.0):
+        speed = self._resolve_speed(ref)
+        for _gs, _ps, audio in self._pipeline(text, voice=voice, speed=speed):
             yield np.asarray(audio, dtype=np.float32)
+
+    @staticmethod
+    def _resolve_speed(ref: VoiceRef) -> float:
+        """Per-voice ``sampling.speed`` override; default 1.0."""
+        sampling = ref.metadata.get("sampling") or {}
+        return float(sampling.get("speed", 1.0))
 
     def health(self) -> dict:
         return {

@@ -166,3 +166,66 @@ def test_sampling_params_thread_to_generate(dia_backend, tiny_ref_wav):
     assert kw["temperature"] == 0.5
     assert kw["top_k"] == 10
     assert kw["max_new_tokens"] == 3072  # unchanged default
+
+
+# ---- per-voice sampling overrides (QUEUED P2 feature) ----
+
+
+def test_voice_sampling_max_new_tokens_overrides_default(dia_backend, tiny_ref_wav):
+    """Per-voice max_new_tokens fixes the documented Dia long-form truncation."""
+    ref = _voice_ref(tiny_ref_wav)
+    ref.metadata["sampling"] = {"max_new_tokens": 8192}
+    dia_backend.synthesize("long story text", ref)
+    kw = dia_backend._model.last_generate_kwargs
+    assert kw["max_new_tokens"] == 8192
+
+
+def test_voice_sampling_temperature_overrides_default(dia_backend, tiny_ref_wav):
+    ref = _voice_ref(tiny_ref_wav)
+    ref.metadata["sampling"] = {"temperature": 0.7}
+    dia_backend.synthesize("text", ref)
+    kw = dia_backend._model.last_generate_kwargs
+    assert kw["temperature"] == 0.7
+
+
+def test_voice_sampling_combined_dia_overrides(dia_backend, tiny_ref_wav):
+    ref = _voice_ref(tiny_ref_wav)
+    ref.metadata["sampling"] = {
+        "max_new_tokens": 4096,
+        "guidance_scale": 4.0,
+        "temperature": 1.5,
+        "top_p": 0.85,
+        "top_k": 30,
+    }
+    dia_backend.synthesize("text", ref)
+    kw = dia_backend._model.last_generate_kwargs
+    assert kw["max_new_tokens"] == 4096
+    assert kw["guidance_scale"] == 4.0
+    assert kw["temperature"] == 1.5
+    assert kw["top_p"] == 0.85
+    assert kw["top_k"] == 30
+
+
+def test_voice_sampling_partial_overrides_use_defaults_for_rest(dia_backend, tiny_ref_wav):
+    """A voice that only overrides max_new_tokens keeps backend defaults for the rest."""
+    ref = _voice_ref(tiny_ref_wav)
+    ref.metadata["sampling"] = {"max_new_tokens": 8192}
+    dia_backend.synthesize("text", ref)
+    kw = dia_backend._model.last_generate_kwargs
+    assert kw["max_new_tokens"] == 8192
+    # Other keys use backend defaults from DiaBackend.load()
+    assert kw["guidance_scale"] == 3.0
+    assert kw["temperature"] == 1.8
+    assert kw["top_p"] == 0.90
+    assert kw["top_k"] == 45
+
+
+def test_no_sampling_block_uses_dia_defaults(dia_backend, tiny_ref_wav):
+    """Voices without metadata['sampling'] get all backend defaults."""
+    ref = _voice_ref(tiny_ref_wav)
+    assert "sampling" not in ref.metadata
+    dia_backend.synthesize("text", ref)
+    kw = dia_backend._model.last_generate_kwargs
+    assert kw["max_new_tokens"] == 3072
+    assert kw["guidance_scale"] == 3.0
+    assert kw["temperature"] == 1.8

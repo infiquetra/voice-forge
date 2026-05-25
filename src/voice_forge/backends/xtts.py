@@ -133,7 +133,15 @@ class XTTSBackend:
         return None
 
     def synthesize(self, text: str, ref: VoiceRef) -> np.ndarray:
-        """Batch synth: returns float32 PCM at 24 kHz."""
+        """Batch synth: returns float32 PCM at 24 kHz.
+
+        Honors ``ref.metadata['sampling']`` overrides per voice:
+        - ``temperature`` (float): sampling temperature
+        - ``top_k`` (int) / ``top_p`` (float): nucleus / top-k sampling
+        - ``speed`` (float): playback-rate; >1 = faster, <1 = slower
+        - ``repetition_penalty`` (float): XTTS-specific repeat suppression
+        - ``length_penalty`` (float): XTTS-specific length bias
+        """
         if self._tts is None:
             raise RuntimeError("XTTSBackend not loaded; call load() first")
         if not ref.ref_audio_path:
@@ -142,11 +150,20 @@ class XTTSBackend:
         # Pull language from registry metadata (default 'en').
         language = ref.metadata.get("language", DEFAULT_LANGUAGE)
 
+        sampling = ref.metadata.get("sampling") or {}
+        tts_kwargs: dict[str, Any] = {}
+        for key in ("speed", "temperature", "top_p", "length_penalty", "repetition_penalty"):
+            if key in sampling:
+                tts_kwargs[key] = float(sampling[key])
+        if "top_k" in sampling:
+            tts_kwargs["top_k"] = int(sampling["top_k"])
+
         with self._lock:
             wav = self._tts.tts(
                 text=text,
                 speaker_wav=ref.ref_audio_path,
                 language=language,
+                **tts_kwargs,
             )
         return np.asarray(wav, dtype=np.float32)
 

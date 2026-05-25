@@ -141,3 +141,33 @@ def test_empty_text_returns_empty_array(monkeypatch):
     assert isinstance(audio, np.ndarray)
     assert audio.dtype == np.float32
     assert len(audio) == 0
+
+
+# ---- per-voice sampling overrides (QUEUED P2 feature) ----
+
+
+def test_voice_sampling_speed_overrides_default(kokoro_backend):
+    """A per-voice speed override reaches KPipeline.__call__."""
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"speed": 1.3}
+    kokoro_backend.synthesize("text", ref)
+    last = kokoro_backend._pipeline.call_log[-1]
+    assert last["speed"] == 1.3
+
+
+def test_no_sampling_block_uses_speed_1(kokoro_backend):
+    """Voices without metadata['sampling'] get the Kokoro default speed=1.0."""
+    ref = _voice_ref()
+    assert "sampling" not in ref.metadata
+    kokoro_backend.synthesize("text", ref)
+    last = kokoro_backend._pipeline.call_log[-1]
+    assert last["speed"] == 1.0
+
+
+def test_voice_sampling_speed_streams_to_synthesize_stream(kokoro_backend):
+    """synthesize_stream honors per-voice speed too."""
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"speed": 0.9}
+    list(kokoro_backend.synthesize_stream("text", ref))
+    last = kokoro_backend._pipeline.call_log[-1]
+    assert last["speed"] == 0.9

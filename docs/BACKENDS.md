@@ -70,6 +70,10 @@ Numbers measured 2026-05-24 / 2026-05-25 on a Mac Studio M2 Ultra. F5 cold-load 
 - **Sample rate:** 24 kHz mono float32 PCM
 - **Streaming:** Supported via `synthesize_stream` (chunked HTTP); native, but with a documented ~15-21% content-loss vs batch ([LEARNINGS § NeuTTS streaming](engineering-journal/LEARNINGS.md)) — callers should default to batch.
 
+### NeuTTS per-voice tunables
+
+NeuTTS's `repeat_penalty` is currently applied at **load time** via a monkey-patch of `Llama.__call__` (the only way to inject it into NeuTTS's autoregressive sampling without forking the upstream). Per-voice override would require thread-local state through the patch — out of scope for v0.2 since NeuTTS is being retired. Document for future: queued under per-voice tuning if/when we revive NeuTTS investment.
+
 ### NeuTTS quirks worth knowing
 
 - **30-second narrative coherence cliff.** Long utterances (>30 s) drift, lose words, or produce repeated tokens. The v0.2 audition produced 41-69 s rows that demonstrated this audibly. Not a hard cutoff — Freya's clone went 35.9 s cleanly on one run — but unreliable past ~30 s. F5-TTS (shipped in v0.2) is the replacement candidate that closes this gap with cloning intact.
@@ -115,6 +119,20 @@ voice-forge voice from-elevenlabs saga-comms --elevenlabs-voice-id <id>
 - **No cloning at runtime.** Training a new voice embedding requires the Kokoro training pipeline + voice samples + GPU + time. Not available as an inference-time path.
 - **Voice mixing syntax is parsed but not fully consumed in v0.2.** voice-forge accepts `--preset "af_bella(2)+af_sky(1)"` and parses it correctly. Multi-voice mixes currently degrade to picking the highest-weight name and logging a warning — tensor-blending the embeddings requires HF-cache path discovery for the per-voice `.pt` files that the upstream README doesn't document. Tracked in [QUEUED.md](engineering-journal/QUEUED.md) under "Kokoro voice-mixing tensor blending".
 
+### Kokoro per-voice tunables
+
+| Key | Type | Default | What it does |
+|---|---|---|---|
+| `speed` | float | 1.0 | Playback rate. Threads through to KPipeline's `speed=` param. >1 = faster. |
+
+Example:
+
+```bash
+voice-forge voice tune kokoro-bella --sampling speed=1.15
+```
+
+(Future: voice-mixing tensor blending when upstream API stabilizes — see [QUEUED voice-mixing](engineering-journal/QUEUED.md).)
+
 ### Adding a Kokoro voice
 
 ```bash
@@ -141,6 +159,27 @@ The voice IS the preset embedding — no ref WAV, no transcript. The `voice_id` 
 - **Voice fidelity varies by reference.** The v0.2 audition surfaced this: on identical refs, **Saga and Hnoss came out faithful to their NeuTTS counterparts; Heid drifted noticeably**. F5's encoder appears sensitive to certain timbres / acoustic characteristics. Worth experimenting with seed values or reference-audio preprocessing per voice when cloning quality matters. See [LEARNINGS § F5 voice-fidelity variance](engineering-journal/LEARNINGS.md).
 - **F5's `infer()` accepts a `speed=` param** (defaults to 1.0). voice-forge doesn't expose this through the Protocol yet — see the queued "per-voice tunable params" item.
 
+### F5 per-voice tunables
+
+Set via `voice-forge voice add ... --sampling key=value` (at registration) or `voice-forge voice tune <id> --sampling key=value` (post-registration). Lands in `metadata.json` under the `sampling` block; F5 reads what it recognizes, ignores the rest.
+
+| Key | Type | Default | What it does |
+|---|---|---|---|
+| `nfe_step` | int | 32 | Diffusion-step count. Lower (e.g. 16) = ~2× faster synth, slightly lower quality. 16 is the practical floor. |
+| `cfg_strength` | float | 2.0 | Classifier-free guidance. Higher = stronger adherence to reference. Try `2.5` or `3.0` when a voice drifts (e.g. Heid). |
+| `seed` | int | None | RNG seed for reproducibility. Pin a seed when a specific render sounded right. |
+| `speed` | float | 1.0 | Playback-rate multiplier. >1 = faster speech. F5's default pace is slower than NeuTTS; bumping to `1.1`-`1.2` makes it more conversational. |
+| `cross_fade_duration` | float | 0.15 | Seconds of crossfade between F5's internal chunks. |
+| `sway_sampling_coef` | float | -1 | F5's sampling-schedule param. Advanced; usually leave alone. |
+| `target_rms` | float | 0.1 | Output volume normalization. |
+| `remove_silence` | bool | False | Post-process silence trim. |
+
+Example tune for Heid (the drift case from the v0.2 audition):
+
+```bash
+voice-forge voice tune heid-research-f5 --sampling cfg_strength=3.0 --sampling seed=42
+```
+
 ### Adding an F5 voice
 
 ```bash
@@ -166,6 +205,17 @@ Same workflow as NeuTTS — the only difference is `--backend f5`.
 - **Cloning is pitch + gender, NOT accent.** Empirically on the Asgard sister refs (American English, distinct individual character): XTTS produces clean audio that lands in the right gender + broad pitch range but loses each sister's accent and timbre. NeuTTS and F5 preserve identity; XTTS doesn't. Use it where "any clean voice" is enough, not for persona TTS.
 - **MPS is 5× SLOWER than CPU on Apple Silicon.** Coqui's codebase has documented patchy MPS support — many ops fall back to CPU mid-graph and the per-op marshalling kills any GPU benefit. Default `device=None` → CPU is correct on M-series; don't override to `"mps"` until upstream coqui-tts ships better op coverage.
 - **Library and model versions can have transformers conflicts.** `coqui-tts==0.27.5` calls `transformers.pytorch_utils.isin_mps_friendly`, an API removed in transformers v5. The `[xtts]` extra explicitly pins `transformers<5`. When you upgrade `coqui-tts`, check if the upper bound is still needed.
+
+### XTTS per-voice tunables
+
+| Key | Type | Default | What it does |
+|---|---|---|---|
+| `speed` | float | model default | Playback rate. |
+| `temperature` | float | model default | Sampling temperature. Higher = more variation. |
+| `top_k` | int | model default | Top-k sampling. |
+| `top_p` | float | model default | Nucleus sampling. |
+| `repetition_penalty` | float | model default | XTTS-specific repeat suppression. |
+| `length_penalty` | float | model default | XTTS-specific length bias. |
 
 ### Adding an XTTS voice
 
@@ -205,6 +255,22 @@ voice-forge voice add saga-xtts /path/to/saga-ref.wav --ref-text "ignored by xtt
 ### When to use Dia anyway
 
 Dia is the only backend voice-forge ships in v0.2 with **multi-speaker dialogue** capability (`[S1]`/`[S2]` tags in input text). For dialogue-shaped content where you want two voices conversing in one synth call — interactive fiction, agent-to-agent conversations, audiobook-style narration — Dia is the right tool. For single-speaker persona TTS on long-form content, F5 is the better pick today; revisit Dia once per-voice `max_new_tokens` tuning ships.
+
+### Dia per-voice tunables
+
+| Key | Type | Default | What it does |
+|---|---|---|---|
+| `max_new_tokens` | int | 3072 | Audio-token budget. Default caps output at ~18-21 s (ref-transcript prefix eats budget). **Bump to 8192 for long-form** — closes the documented Dia long-form truncation. |
+| `guidance_scale` | float | 3.0 | Classifier-free guidance. |
+| `temperature` | float | 1.8 | Sampling temperature. |
+| `top_p` | float | 0.90 | Nucleus sampling. |
+| `top_k` | int | 45 | Top-k sampling. |
+
+Example tune for the long-form truncation problem:
+
+```bash
+voice-forge voice tune saga-comms-dia --sampling max_new_tokens=8192
+```
 
 ### Adding a Dia voice
 

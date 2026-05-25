@@ -50,22 +50,18 @@ class FakeF5TTS:
         gen_text: str,
         show_info=print,
         progress=None,
-        target_rms: float = 0.1,
-        cross_fade_duration: float = 0.15,
-        sway_sampling_coef: float = -1,
-        cfg_strength: float = 2,
-        nfe_step: int = 32,
-        speed: float = 1.0,
-        fix_duration: float | None = None,
-        remove_silence: bool = False,
-        file_wave: str | None = None,
-        file_spec: str | None = None,
-        seed: int | None = None,
+        **kwargs,
     ):
-        """Return (wav, sr, spec) — 0.5s of silence at 24kHz, dummy spec."""
-        self.calls.append(
-            {"ref_file": ref_file, "ref_text": ref_text, "gen_text": gen_text, "nfe_step": nfe_step}
-        )
+        """Return (wav, sr, spec) — 0.5s of silence at 24kHz, dummy spec.
+
+        Records ALL kwargs so tests can verify sampling overrides reach this
+        call. Default values are not recorded (only what the backend explicitly
+        passed); this lets tests differentiate "backend forwarded the override"
+        from "F5TTS would have used its own default."
+        """
+        record = {"ref_file": ref_file, "ref_text": ref_text, "gen_text": gen_text}
+        record.update(kwargs)
+        self.calls.append(record)
         wav = np.zeros(int(SAMPLE_RATE * 0.5), dtype=np.float32)
         spec = np.zeros((80, 100), dtype=np.float32)  # dummy mel-spectrogram
         return wav, SAMPLE_RATE, spec

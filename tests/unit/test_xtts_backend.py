@@ -151,3 +151,47 @@ def test_synthesize_without_load_raises(monkeypatch):
     backend = XTTSBackend()  # no .load() call
     with pytest.raises(RuntimeError, match="not loaded"):
         backend.synthesize("text", _voice_ref())
+
+
+# ---- per-voice sampling overrides (QUEUED P2 feature) ----
+
+
+def test_voice_sampling_speed_threads_through(xtts_backend):
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"speed": 1.2}
+    xtts_backend.synthesize("text", ref)
+    last = xtts_backend._tts.calls[-1]
+    assert last["speed"] == 1.2
+
+
+def test_voice_sampling_temperature_and_top_k(xtts_backend):
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"temperature": 0.7, "top_k": 30}
+    xtts_backend.synthesize("text", ref)
+    last = xtts_backend._tts.calls[-1]
+    assert last["temperature"] == 0.7
+    assert last["top_k"] == 30
+    assert isinstance(last["top_k"], int)
+
+
+def test_voice_sampling_repetition_and_length_penalty(xtts_backend):
+    """XTTS-specific tunables — repetition_penalty + length_penalty."""
+    ref = _voice_ref()
+    ref.metadata["sampling"] = {"repetition_penalty": 2.0, "length_penalty": 0.8}
+    xtts_backend.synthesize("text", ref)
+    last = xtts_backend._tts.calls[-1]
+    assert last["repetition_penalty"] == 2.0
+    assert last["length_penalty"] == 0.8
+
+
+def test_no_sampling_block_uses_xtts_defaults(xtts_backend):
+    """No sampling = no per-call kwargs forwarded; XTTS uses its built-in defaults."""
+    ref = _voice_ref()
+    assert "sampling" not in ref.metadata
+    xtts_backend.synthesize("text", ref)
+    last = xtts_backend._tts.calls[-1]
+    # The optional sampling keys should NOT be in the call record (would have
+    # been recorded by the fake if forwarded).
+    assert "speed" not in last
+    assert "temperature" not in last
+    assert "top_k" not in last

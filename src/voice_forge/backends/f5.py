@@ -85,7 +85,19 @@ class F5Backend:
         return None
 
     def synthesize(self, text: str, ref: VoiceRef) -> np.ndarray:
-        """Batch synth: returns float32 PCM at 24 kHz."""
+        """Batch synth: returns float32 PCM at 24 kHz.
+
+        Honors ``ref.metadata['sampling']`` overrides per voice:
+        - ``nfe_step`` (int): diffusion-step count; lower = faster, lower quality
+        - ``cfg_strength`` (float): classifier-free guidance; higher = stronger
+          adherence to the reference. Useful when a voice drifts (e.g. Heid).
+        - ``seed`` (int): RNG seed for reproducibility / consistent regenerations
+        - ``speed`` (float): playback-rate multiplier; 1.0 = natural, >1 = faster
+        - ``cross_fade_duration`` (float): seconds of crossfade between chunks
+        - ``sway_sampling_coef`` (float): sampling-schedule param; F5 default -1
+        - ``target_rms`` (float): output volume normalization; F5 default 0.1
+        - ``remove_silence`` (bool): post-process silence trim
+        """
         if self._tts is None:
             raise RuntimeError("F5Backend not loaded; call load() first")
         if not ref.ref_audio_path:
@@ -93,13 +105,32 @@ class F5Backend:
         if not ref.ref_text:
             raise ValueError(f"f5 requires ref_text; voice {ref.voice_id!r} has none")
 
+        sampling = ref.metadata.get("sampling") or {}
+        # Recognized per-voice tunables for F5; other keys are silently ignored.
+        infer_kwargs: dict[str, Any] = {
+            "nfe_step": int(sampling.get("nfe_step", self._config["nfe_step"])),
+        }
+        for key in (
+            "cfg_strength",
+            "speed",
+            "cross_fade_duration",
+            "sway_sampling_coef",
+            "target_rms",
+        ):
+            if key in sampling:
+                infer_kwargs[key] = float(sampling[key])
+        if "seed" in sampling:
+            infer_kwargs["seed"] = int(sampling["seed"])
+        if "remove_silence" in sampling:
+            infer_kwargs["remove_silence"] = bool(sampling["remove_silence"])
+
         with self._lock:
             wav, _sr, _spec = self._tts.infer(
                 ref_file=ref.ref_audio_path,
                 ref_text=ref.ref_text,
                 gen_text=text,
-                nfe_step=self._config["nfe_step"],
                 show_info=lambda *_a, **_k: None,  # silence F5's print() calls
+                **infer_kwargs,
             )
         return np.asarray(wav, dtype=np.float32)
 

@@ -148,6 +148,14 @@ class DiaBackend:
     def synthesize(self, text: str, ref: VoiceRef) -> np.ndarray:
         """Single-speaker cloning synth: returns float32 PCM at 24 kHz.
 
+        Honors ``ref.metadata['sampling']`` overrides per voice:
+        - ``max_new_tokens`` (int): audio-token budget. Default 3072 caps
+          output at ~18-21 s in practice (with the ref-transcript prefix
+          consuming budget). Bump to 8192 for long-form p3 content.
+        - ``guidance_scale`` (float): classifier-free guidance strength.
+        - ``temperature`` (float): sampling temperature.
+        - ``top_p`` (float) / ``top_k`` (int): nucleus / top-k sampling.
+
         Multi-speaker dialogue (alternating ``[S1]``/``[S2]``) works at the
         model level but isn't exercised through voice-forge in v0.2. To use
         it, pre-format the input text with the speaker tags and pass to a
@@ -178,6 +186,17 @@ class DiaBackend:
         # both prefixed with [S1] for single-speaker cloning.
         prompt = f"[S1] {ref.ref_text.strip()} [S1] {text.strip()}"
 
+        # Per-voice sampling overrides (QUEUED P2). Fall back to load-time
+        # defaults for any key not in the voice's metadata.
+        sampling = ref.metadata.get("sampling") or {}
+        generate_kwargs = {
+            "max_new_tokens": int(sampling.get("max_new_tokens", self._config["max_new_tokens"])),
+            "guidance_scale": float(sampling.get("guidance_scale", self._config["guidance_scale"])),
+            "temperature": float(sampling.get("temperature", self._config["temperature"])),
+            "top_p": float(sampling.get("top_p", self._config["top_p"])),
+            "top_k": int(sampling.get("top_k", self._config["top_k"])),
+        }
+
         with self._lock:
             inputs = self._processor(
                 text=[prompt],
@@ -186,14 +205,7 @@ class DiaBackend:
                 return_tensors="pt",
             ).to(self._device)
 
-            outputs = self._model.generate(
-                **inputs,
-                max_new_tokens=self._config["max_new_tokens"],
-                guidance_scale=self._config["guidance_scale"],
-                temperature=self._config["temperature"],
-                top_p=self._config["top_p"],
-                top_k=self._config["top_k"],
-            )
+            outputs = self._model.generate(**inputs, **generate_kwargs)
 
             audio_prompt_len = self._processor.get_audio_prompt_len(inputs.decoder_attention_mask)
             decoded = self._processor.batch_decode(outputs, audio_prompt_len=audio_prompt_len)
