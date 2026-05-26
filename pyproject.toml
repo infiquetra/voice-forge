@@ -138,6 +138,10 @@ allow-direct-references = true
 # Dist name is voice-forge-tts but the import package is voice_forge.
 # Hatchling can't auto-derive that mapping from the renamed dist; declare it.
 packages = ["src/voice_forge"]
+# personas/ holds user-specific voice fleets (e.g. personas/asgard/ is the
+# maintainer's Asgard fleet). These are intentionally kept in the repo
+# for dev workflow + as a worked schema example, but never installed.
+exclude = ["personas/**"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -150,6 +154,11 @@ include = [
     "LICENSE",
     "pyproject.toml",
 ]
+# Same exclusion at the sdist level — hatchling auto-includes README.md
+# files from any discovered subdir, so without this the personas/*/README
+# files leak into the source archive even though their parent dir isn't
+# in the include list above.
+exclude = ["personas/**"]
 
 [project.urls]
 Homepage = "https://github.com/infiquetra/voice-forge"
