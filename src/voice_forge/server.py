@@ -25,6 +25,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 import wave
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
@@ -112,35 +113,56 @@ app = FastAPI(
 
 
 _BACKENDS: dict[str, object] = {}
+# Per-backend lock so concurrent _ensure_backend calls don't each spawn a
+# duplicate subprocess child during the cold-load window. The lock is
+# acquired by the FIRST caller; subsequent callers block until the first
+# call resolves, at which point _BACKENDS[name] is populated and they
+# return immediately. Keyed by backend name so different backends can
+# still cold-load in parallel.
+_BACKEND_LOAD_LOCKS: dict[str, threading.Lock] = {}
+_BACKEND_LOAD_LOCKS_GUARD = threading.Lock()
 
 
 def _ensure_backend(name: str, config: dict | None = None):
-    """Lazy-load + cache backend instances. One per backend name per process."""
+    """Lazy-load + cache backend instances. One per backend name per process.
+
+    Thread-safe via per-backend locks: concurrent calls for the same backend
+    serialize; calls for different backends proceed in parallel. The first
+    caller does the actual load; followers see the cached instance.
+    """
     if name in _BACKENDS:
         return _BACKENDS[name]
-    try:
-        load_backend_module(name)
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"unknown backend: {name!r}; known: {known_backends()}",
-        ) from exc
-    except ImportError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"backend {name!r} known but not installed; "
-                f"install with `pip install voice-forge-tts[{name}]` ({exc})"
-            ),
-        ) from exc
-    backend_cls = get_backend(name)
-    backend = backend_cls()
-    logger.info("loading backend %s ...", name)
-    backend.load(config or {})
-    logger.info("backend %s loaded", name)
-    _BACKENDS[name] = backend
-    metrics.backend_loaded.labels(backend=name).set(1)
-    return backend
+    # Acquire (or create) the per-backend lock under a tiny global guard.
+    with _BACKEND_LOAD_LOCKS_GUARD:
+        lock = _BACKEND_LOAD_LOCKS.setdefault(name, threading.Lock())
+    with lock:
+        # Re-check after acquiring lock — another thread may have loaded it
+        # while we waited.
+        if name in _BACKENDS:
+            return _BACKENDS[name]
+        try:
+            load_backend_module(name)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"unknown backend: {name!r}; known: {known_backends()}",
+            ) from exc
+        except ImportError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"backend {name!r} known but not installed; "
+                    f"install with `pip install voice-forge-tts[{name}]` ({exc})"
+                ),
+            ) from exc
+        backend_cls = get_backend(name)
+        backend = backend_cls()
+        logger.info("loading backend %s ...", name)
+        backend.load(config or {})
+        logger.info("backend %s loaded", name)
+        _BACKENDS[name] = backend
+        metrics.backend_loaded.labels(backend=name).set(1)
+        return backend
 
 
 def _registry() -> Registry:

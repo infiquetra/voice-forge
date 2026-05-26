@@ -207,10 +207,14 @@ class SubprocessBackend:
         # range [0; 4294967295]". Strip it — the child generates its own
         # at startup, and we don't need cross-process hash compatibility.
         env.pop("PYTHONHASHSEED", None)
-        # Same hygiene for PYTHONSTARTUP — could point at a script not in
-        # the child venv. Other PYTHON* vars (PYTHONPATH etc) we leave
-        # alone since they're useful when set.
         env.pop("PYTHONSTARTUP", None)
+        # Sentinel that flips the backend module's registration to the
+        # in-process variant (uses upstream lib directly) instead of
+        # re-registering the SubprocessBackend wrapper. Without this, the
+        # child would import the SUBPROCESS variant and try to spawn yet
+        # another child — infinite fan-out, hung children, the actual
+        # bug behind "chatterbox load took forever then never worked."
+        env["VOICE_FORGE_SUBPROCESS_CHILD"] = "1"
         for k, v in (config or {}).items():
             if k != "backends_root" and isinstance(v, str | int | float | bool):
                 env[f"VOICE_FORGE_BACKEND_CONFIG_{k.upper()}"] = str(v)
