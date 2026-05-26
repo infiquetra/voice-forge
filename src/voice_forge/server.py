@@ -919,6 +919,7 @@ async def get_voice_reference(voice_id: str) -> FileResponse:
 # ---- Live in-browser WS demo ----
 
 _DEMO_HTML_PATH = Path(__file__).resolve().parent / "static" / "live_demo.html"
+_LAB_HTML_PATH = Path(__file__).resolve().parent / "static" / "lab.html"
 
 
 @app.get("/demo", response_class=HTMLResponse)
@@ -933,6 +934,19 @@ async def demo_page() -> FileResponse:
     if not _DEMO_HTML_PATH.is_file():
         raise HTTPException(status_code=500, detail=f"demo page missing at {_DEMO_HTML_PATH}")
     return FileResponse(_DEMO_HTML_PATH, media_type="text/html")
+
+
+@app.get("/lab", response_class=HTMLResponse)
+async def lab_page() -> FileResponse:
+    """Voice tuning + scoring workstation — persona × backend matrix.
+
+    See ``.claude/plans/2026-05-25-voice-lab-tuning-workstation.md`` for the
+    design. Pairs with /v1/scorecard + /v1/personas/prompts + /v1/presets/*
+    + /v1/voices/{id}/reference endpoints.
+    """
+    if not _LAB_HTML_PATH.is_file():
+        raise HTTPException(status_code=500, detail=f"lab page missing at {_LAB_HTML_PATH}")
+    return FileResponse(_LAB_HTML_PATH, media_type="text/html")
 
 
 # ---- Layer-2 streaming: WebSocket bidirectional ----

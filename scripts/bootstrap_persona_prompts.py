@@ -54,7 +54,10 @@ def main(argv: list[str] | None = None) -> int:
 
     responses = yaml.safe_load(args.responses.read_text())
     if not isinstance(responses, dict):
-        print(f"error: responses.yaml top-level is not a dict (got {type(responses).__name__})", file=sys.stderr)
+        print(
+            f"error: responses.yaml top-level is not a dict (got {type(responses).__name__})",
+            file=sys.stderr,
+        )
         return 1
 
     existing: dict[str, dict] = {}
@@ -85,7 +88,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(existing, indent=2, sort_keys=True))
-    print(f"wrote {len(existing)} personas to {args.output} ({created} new, {skipped} skipped existing)")
+    print(
+        f"wrote {len(existing)} personas to {args.output} "
+        f"({created} new, {skipped} skipped existing)"
+    )
     return 0
 
 
