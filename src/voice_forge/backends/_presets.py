@@ -22,12 +22,14 @@ curating gives us a chance to label them with language + gender for the UI.
 from __future__ import annotations
 
 KOKORO_PRESETS: list[dict] = [
-    # American English female
+    # American English female — verified against the live voices/ dir
+    # at https://huggingface.co/hexgrad/Kokoro-82M (54 voices total).
+    # IDs without an entry on HF (af_jadzia, am_v0gurney, etc) were
+    # removed 2026-05-26 after hitting 404s in the preset sampler.
     {"id": "af_alloy", "language": "en-us", "gender": "f", "label": "Alloy"},
     {"id": "af_aoede", "language": "en-us", "gender": "f", "label": "Aoede"},
     {"id": "af_bella", "language": "en-us", "gender": "f", "label": "Bella"},
     {"id": "af_heart", "language": "en-us", "gender": "f", "label": "Heart"},
-    {"id": "af_jadzia", "language": "en-us", "gender": "f", "label": "Jadzia"},
     {"id": "af_jessica", "language": "en-us", "gender": "f", "label": "Jessica"},
     {"id": "af_kore", "language": "en-us", "gender": "f", "label": "Kore"},
     {"id": "af_nicole", "language": "en-us", "gender": "f", "label": "Nicole"},
@@ -35,8 +37,6 @@ KOKORO_PRESETS: list[dict] = [
     {"id": "af_river", "language": "en-us", "gender": "f", "label": "River"},
     {"id": "af_sarah", "language": "en-us", "gender": "f", "label": "Sarah"},
     {"id": "af_sky", "language": "en-us", "gender": "f", "label": "Sky"},
-    {"id": "af_v0bella", "language": "en-us", "gender": "f", "label": "Bella (v0)"},
-    {"id": "af_v0irulan", "language": "en-us", "gender": "f", "label": "Irulan (v0)"},
     # American English male
     {"id": "am_adam", "language": "en-us", "gender": "m", "label": "Adam"},
     {"id": "am_echo", "language": "en-us", "gender": "m", "label": "Echo"},
@@ -47,8 +47,6 @@ KOKORO_PRESETS: list[dict] = [
     {"id": "am_onyx", "language": "en-us", "gender": "m", "label": "Onyx"},
     {"id": "am_puck", "language": "en-us", "gender": "m", "label": "Puck"},
     {"id": "am_santa", "language": "en-us", "gender": "m", "label": "Santa"},
-    {"id": "am_v0adam", "language": "en-us", "gender": "m", "label": "Adam (v0)"},
-    {"id": "am_v0gurney", "language": "en-us", "gender": "m", "label": "Gurney (v0)"},
     # British English female
     {"id": "bf_alice", "language": "en-gb", "gender": "f", "label": "Alice"},
     {"id": "bf_emma", "language": "en-gb", "gender": "f", "label": "Emma"},
