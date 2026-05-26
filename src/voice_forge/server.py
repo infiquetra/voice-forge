@@ -17,6 +17,7 @@ serializes inference.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -824,23 +825,29 @@ async def _handle_ws_session(ws: WebSocket, init: object) -> None:
     )
 
     buffer = SentenceBuffer()
-    sentence_idx = 0
-    end_received = False
+    # asyncio.Queue lets the producer (WS-receive coroutine) hand sentences
+    # to the consumer (synth-and-send coroutine) as soon as each sentence
+    # boundary forms. The producer is then free to keep pulling text frames
+    # while the consumer is mid-synth — which is the layer-2 pipelining win
+    # (synth(s2) starts as soon as the SentenceBuffer emits it, NOT after
+    # synth(s1) + send(s1) have finished). The F5 backend's threading.Lock
+    # still serializes the actual synth work, but the WS receive path is no
+    # longer blocked behind synth.
+    #
+    # ``None`` is the "no more sentences" sentinel pushed by the producer
+    # once the client signals ``end: true`` and the buffer is flushed.
+    sentence_queue: asyncio.Queue[tuple[int, str] | None] = asyncio.Queue()
+    sentence_idx_total = 0  # mutated by the producer; read by the final complete frame
+    error_state: dict[str, str] = {}  # set by either task on failure
 
     async def _synth_and_send(sentence: str, idx: int) -> None:
-        nonlocal sentence_idx
         import time
 
         await ws.send_json({"event": "sentence_start", "idx": idx, "text": sentence})
         t0 = time.monotonic()
-        # Offload sync synth to threadpool so the asyncio loop stays
-        # responsive — receiving more text from the client meanwhile.
         audio = await run_in_threadpool(backend.synthesize, sentence, voice_ref)
         synth_sec = time.monotonic() - t0
         synth_ms = int(synth_sec * 1000)
-        # Record per-sentence latency on the same histogram the REST path uses,
-        # under mode="stream". Per-sentence is finer-grained than per-utterance
-        # which matches what WS callers actually optimize for.
         metrics.synth_seconds.labels(
             backend=voice_ref.backend, voice_id=voice_id, mode="stream"
         ).observe(synth_sec)
@@ -855,28 +862,64 @@ async def _handle_ws_session(ws: WebSocket, init: object) -> None:
             }
         )
 
-    try:
-        while not end_received:
-            try:
-                msg = await ws.receive_json()
-            except WebSocketDisconnect:
+    async def receive_producer() -> None:
+        nonlocal sentence_idx_total
+        end_received = False
+        try:
+            while not end_received:
+                try:
+                    msg = await ws.receive_json()
+                except WebSocketDisconnect:
+                    # Client gone; signal consumer to drain + exit
+                    return
+                if not isinstance(msg, dict):
+                    continue
+                chunk = msg.get("text") or ""
+                if chunk:
+                    for sentence in buffer.feed(chunk):
+                        await sentence_queue.put((sentence_idx_total, sentence))
+                        sentence_idx_total += 1
+                if msg.get("end"):
+                    end_received = True
+                    tail = buffer.flush()
+                    if tail:
+                        await sentence_queue.put((sentence_idx_total, tail))
+                        sentence_idx_total += 1
+        except Exception as exc:
+            error_state["producer"] = repr(exc)
+            logger.exception("ws producer failure for voice=%r", voice_id)
+        finally:
+            # Always tell the consumer "no more" so it can exit cleanly.
+            await sentence_queue.put(None)
+
+    async def synth_consumer() -> None:
+        while True:
+            item = await sentence_queue.get()
+            if item is None:
                 return
-            if not isinstance(msg, dict):
-                continue
-            chunk = msg.get("text") or ""
-            if chunk:
-                for sentence in buffer.feed(chunk):
-                    await _synth_and_send(sentence, sentence_idx)
-                    sentence_idx += 1
-            if msg.get("end"):
-                end_received = True
-                tail = buffer.flush()
-                if tail:
-                    await _synth_and_send(tail, sentence_idx)
-                    sentence_idx += 1
-        await ws.send_json({"event": "complete", "sentences_total": sentence_idx})
-    except Exception as exc:  # surface any backend-side failure to the client
-        logger.exception("ws_tts_stream failure for voice=%r", voice_id)
+            idx, sentence = item
+            try:
+                await _synth_and_send(sentence, idx)
+            except Exception as exc:
+                error_state["consumer"] = repr(exc)
+                logger.exception("ws consumer failure for voice=%r", voice_id)
+                return
+
+    try:
+        # Producer + consumer run concurrently. The producer hands sentences
+        # to the consumer via the queue and pushes ``None`` when done, so
+        # gather() naturally completes once both halves finish.
+        producer_task = asyncio.create_task(receive_producer())
+        consumer_task = asyncio.create_task(synth_consumer())
+        await asyncio.gather(producer_task, consumer_task)
+        if error_state:
+            detail = error_state.get("consumer") or error_state.get("producer") or "unknown"
+            await ws.send_json({"event": "error", "detail": detail})
+            await ws.close(code=1011)
+            return
+        await ws.send_json({"event": "complete", "sentences_total": sentence_idx_total})
+    except Exception as exc:  # belt-and-suspenders — task-level errors already trapped above
+        logger.exception("ws_tts_stream outer failure for voice=%r", voice_id)
         try:
             await ws.send_json({"event": "error", "detail": str(exc)})
         except Exception:

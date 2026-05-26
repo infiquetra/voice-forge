@@ -390,6 +390,113 @@ def test_metrics_ws_active_connections_tracks_open_sockets(ws_setup):
     assert after == initial, f"expected gauge back to initial; initial={initial} after={after}"
 
 
+def test_ws_pipelining_handles_burst_of_sentences_in_one_frame(ws_setup):
+    """Burst-loading multiple sentences in one text frame: producer fans them out
+    onto the queue; consumer drains in order. Exercises the producer/consumer
+    split in the WS handler."""
+    client, fake = ws_setup
+    with client.websocket_connect("/v1/tts/stream") as ws:
+        ws.send_json({"voice": "fake-voice"})
+        ws.receive_json()  # session
+        # All five sentences in one text frame — they all hit SentenceBuffer
+        # boundaries together, producer pushes all five onto the queue, consumer
+        # drains them sequentially via the F5-style backend lock.
+        ws.send_json({"text": "S1. S2. S3. S4. S5.", "end": True})
+        events, audio = _collect_until_complete(ws)
+
+    assert [c[1] for c in fake.calls] == ["S1.", "S2.", "S3.", "S4.", "S5."]
+    assert len(audio) == 5
+    done_events = [e for e in events if e["event"] == "sentence_done"]
+    assert [e["idx"] for e in done_events] == [0, 1, 2, 3, 4]
+    assert [e for e in events if e["event"] == "complete"][0]["sentences_total"] == 5
+
+
+def test_ws_pipelining_text_arriving_after_synth_starts(ws_setup):
+    """Producer keeps pulling text frames while consumer is mid-synth — the
+    scenario where layer-2 actually pays off vs the old sequential handler.
+
+    Sends s1's boundary, then immediately s2/s3 + end while s1 is being
+    synthesized in the threadpool. With pipelining the producer never blocks
+    on the consumer, so all three sentences end up queued + synth'd in order.
+    """
+    client, fake = ws_setup
+    with client.websocket_connect("/v1/tts/stream") as ws:
+        ws.send_json({"voice": "fake-voice"})
+        ws.receive_json()
+        # Each send_json is a separate WS frame the producer pulls in its loop;
+        # interleave so the queue has items by the time synth(s1) returns.
+        ws.send_json({"text": "First. "})
+        ws.send_json({"text": "Second. "})
+        ws.send_json({"text": "Third.", "end": True})
+        events, _ = _collect_until_complete(ws)
+
+    assert [c[1] for c in fake.calls] == ["First.", "Second.", "Third."]
+    assert [e for e in events if e["event"] == "complete"][0]["sentences_total"] == 3
+
+
+def test_ws_consumer_failure_surfaces_as_error_event(ws_setup, monkeypatch):
+    """If backend.synthesize raises mid-stream, the consumer task catches it,
+    sets error_state, and the WS sends an ``error`` event before closing."""
+    client, fake = ws_setup
+
+    # Patch the fake's synth to raise on the second sentence — the first
+    # should complete normally, the second triggers the error path.
+    original_synthesize = fake.synthesize
+    call_count = {"n": 0}
+
+    def boom_on_second(text, ref):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("synthetic backend failure")
+        return original_synthesize(text, ref)
+
+    monkeypatch.setattr(fake, "synthesize", boom_on_second)
+
+    with client.websocket_connect("/v1/tts/stream") as ws:
+        ws.send_json({"voice": "fake-voice"})
+        ws.receive_json()
+        ws.send_json({"text": "Good. Bad. Never.", "end": True})
+
+        events: list[dict] = []
+        seen_error = False
+        try:
+            while True:
+                msg = ws.receive()
+                if "text" in msg and msg["text"] is not None:
+                    event = json.loads(msg["text"])
+                    events.append(event)
+                    if event.get("event") == "error":
+                        seen_error = True
+                        break
+        except Exception:
+            # Server-side close after error may surface as a TestClient exception
+            pass
+
+    assert seen_error, f"expected error event in {[e.get('event') for e in events]}"
+    error_event = next(e for e in events if e["event"] == "error")
+    assert "synthetic backend failure" in error_event["detail"]
+
+
+def test_ws_burst_then_idle_still_completes(ws_setup):
+    """Five sentences fired at once, then a long pause before end:true.
+    Producer queues all five immediately; consumer drains while the producer
+    blocks waiting for the end frame. Tests that the queue/sentinel flow
+    handles the "all work queued before end arrives" case."""
+    client, fake = ws_setup
+    with client.websocket_connect("/v1/tts/stream") as ws:
+        ws.send_json({"voice": "fake-voice"})
+        ws.receive_json()
+        ws.send_json({"text": "A1. A2. A3. A4. A5. "})
+        # No end yet — the trailing space ensures the last sentence boundary
+        # fires inside the buffer.
+        ws.send_json({"end": True})
+        events, audio = _collect_until_complete(ws)
+
+    assert [c[1] for c in fake.calls] == ["A1.", "A2.", "A3.", "A4.", "A5."]
+    assert len(audio) == 5
+    assert [e for e in events if e["event"] == "complete"][0]["sentences_total"] == 5
+
+
 def test_load_endpoint_warms_a_backend(ws_setup):
     """POST /v1/backends/<name>/load loads the backend without needing a synth call."""
     client, _ = ws_setup

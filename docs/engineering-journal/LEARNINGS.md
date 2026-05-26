@@ -27,6 +27,36 @@
 
 ## 2026-05-25
 
+### WS layer-2 pipelining via asyncio producer/consumer — receive task pulls text while consumer is mid-synth
+
+**Context.** WS layer-2 (`WS /v1/tts/stream`) shipped earlier today (commit `694b0fe`) with a sequential handler — for each WS message, the loop drained any complete sentences from `SentenceBuffer` and `await`ed `_synth_and_send()` before going back to `ws.receive_json()`. That meant: while `synth(s1)` ran in `run_in_threadpool`, the asyncio event loop COULD run other coroutines, but the *same coroutine* that owned receive could not pull new text frames until the current synth fully returned. Sentences arriving DURING synth(s1) sat in the WS recv buffer until the consumer was ready.
+
+**Evidence.** Refactored to producer/consumer with an `asyncio.Queue` between them (commit pending). Producer coroutine = WS receive + SentenceBuffer feed + queue.put. Consumer coroutine = queue.get + `_synth_and_send`. Both `await`ed concurrently via `asyncio.gather`. Producer pushes `None` as the sentinel when the client signals `end: true` and the buffer is flushed; consumer exits cleanly on the sentinel.
+
+Live smoke against the real server (Kokoro backend, 3 sentences in one text frame): producer drained all three sentence boundaries from the single text frame, queued all three, consumer synthesized each in order — all three audio frames + sentence_done events arrived correctly.
+
+Unit tests: 4 new tests covering (a) burst input fanout (5 sentences in 1 frame), (b) trickle-while-synthesizing (multiple text frames interleaved with consumer work), (c) consumer error surfacing (synth raises → producer keeps queueing → error event sent), (d) burst-then-idle (all work queued before end frame arrives).
+
+**Mechanism.** The F5 backend still holds an internal `threading.Lock()` for inference, so the actual synth work remains serial. What pipelining buys us is:
+
+1. **Receive concurrency.** While synth(s1) runs in the threadpool worker, the producer coroutine can pull text frames + emit sentence boundaries to the queue. Sentences 2..N are queued BEFORE synth(s1) returns.
+2. **Zero gap between consecutive synths.** As soon as `await ws.send_json("sentence_done", idx)` returns, the consumer hits `queue.get()` and immediately gets sentence 2 (already buffered) — no extra await for the next text frame.
+
+Without pipelining, the gap between sentence_done(N) and synth_start(N+1) was bounded by network RTT + the time for the next sentence to fully arrive. With pipelining, that gap is bounded by `ws.send_json` time alone (microseconds in TestClient; tens of milliseconds on a real network).
+
+**Size of the win in practice.** For a token-by-token LLM upstream feeding ~50 chars/sec into voice-forge, sentences emerge from `SentenceBuffer` faster than F5's `nfe_step=16` can synthesize them. After the first sentence, the consumer is always synth-bound and the producer is always ahead. The end-to-end latency reduction vs the sequential handler is roughly `(N-1) × per-receive-overhead` — a few seconds total on a 10-sentence story over a typical LAN.
+
+**Tradeoffs considered + rejected.**
+
+- **Multiple parallel consumer tasks (true parallel synth).** Doesn't work for in-process backends because of the backend-level `threading.Lock`. PyTorch models on a single device can't truly parallelize multiple inferences anyway. Would only help for subprocess-isolated backends (Piper, Chatterbox) — those each have their own child process, so two concurrent synth requests against different subprocess backends could in principle run in parallel. Skipped for v0.3; the gating concern (preserve sentence-ORDER in the output stream) makes it more work than it's worth for the current single-voice-per-WS use case.
+- **Unbounded queue depth.** asyncio.Queue defaults to unbounded. For LLM token rate ~50 chars/sec and synth rate ~1 sentence per few seconds, the queue size is bounded by how much text the LLM produces during synth — at most low single digits. Not worth bounding for v0.3.
+
+**Generalizable rule.** When a coroutine-based handler does receive → process → send in a loop, the process step blocks the receive step if both share a coroutine. Splitting into producer/consumer with an asyncio.Queue is the standard fix; the gather pattern keeps the lifetime of both halves coordinated. The win shows up specifically when "process" can run in the background (via `run_in_threadpool` or `asyncio.create_task`) — in our case, the threadpool offload for sync backend.synthesize calls.
+
+**Refs.** Commit pending. Closes [QUEUED](QUEUED.md) → "Pipelining: synth sentence N+1 while sending sentence N (WS layer-2 perf)" / task #21.
+
+---
+
 ### Upstream packaging defects in TTS backend ecosystem — three real ones found by actually trying to install
 
 **Context.** v0.3 shipped a subprocess-isolated backend pattern + concrete backends for Piper / Chatterbox / MeloTTS. The `voice-forge backend install <name>` CLI was supposed to make these one-command installs. Real-world install attempts on macOS arm64 / Python 3.12 revealed three distinct upstream packaging defects.

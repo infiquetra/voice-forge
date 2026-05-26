@@ -68,7 +68,7 @@
 - [x] **Demo UX rebuild** — persona + model split dropdowns + conditional per-backend knob panel (commit `9a0c544`)
 - [x] **`voice-forge backend install <name>` CLI** — provisions per-backend venvs (commit pending)
 - [ ] **Bearer-token auth** — DEFERRED 2026-05-25 pending a token-issuance story; see [QUEUED](engineering-journal/QUEUED.md) § "OpenAI-API-compatible authentication"
-- [ ] **WS layer-2 pipelining** — synth sentence N+1 while sending sentence N (task #21, ~half-day win)
+- [x] **WS layer-2 pipelining** — asyncio producer/consumer split so receive task pulls text while consumer is mid-synth (commit pending; see LEARNINGS 2026-05-25 § "WS layer-2 pipelining")
 - [ ] **F5 accent retention tuning** — `cfg_strength` per-voice experimentation (task #20)
 - [ ] **Wyoming protocol adapter** (Home Assistant integration)
 - [ ] **Hermes-agent integration** to actually consume streaming end-to-end — task #23, work is in `infiquetra/home-lab`, not voice-forge
