@@ -230,22 +230,45 @@
   }
 
   // ===== WS streaming + Web Audio playback =====
+  // PCM_SAMPLE_RATE pins the rate at which the server-shipped float32 buffer
+  // should be INTERPRETED, independent of the AudioContext's actual hardware
+  // rate. createBuffer's third arg sets the buffer's sample rate; the
+  // AudioBufferSourceNode resamples to ac.sampleRate on playback. Using
+  // ac.sampleRate here (as we used to) caused 24kHz PCM to be played at the
+  // context's rate — 0.5x duration on 48kHz devices, silent on some
+  // browser/hardware combinations that rejected the requested rate.
+  const PCM_SAMPLE_RATE = 24000;
   let activeAudioContext = null;
   let activeNextStartTime = 0;
 
-  function ensureAudioContext() {
+  async function ensureAudioContext() {
     if (!activeAudioContext || activeAudioContext.state === "closed") {
-      activeAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      try {
+        activeAudioContext = new Ctor({ sampleRate: PCM_SAMPLE_RATE });
+      } catch (e) {
+        // Some browser/device combos (e.g. older Safari, certain
+        // USB audio interfaces) reject explicit sampleRate. Fall back
+        // to the default rate; the AudioBufferSourceNode will resample
+        // the 24kHz PCM up to whatever the context picks.
+        console.warn("lab: AudioContext{24000} rejected; falling back", e);
+        activeAudioContext = new Ctor();
+      }
       activeNextStartTime = 0;
-    } else if (activeAudioContext.state === "suspended") {
-      activeAudioContext.resume().catch(() => {});
+    }
+    if (activeAudioContext.state === "suspended") {
+      // AWAIT the resume — otherwise the first src.start() can land on a
+      // still-suspended context, which silently no-ops and explains
+      // "stream appears to play but no sound".
+      try { await activeAudioContext.resume(); } catch (e) { /* ignore */ }
     }
     return activeAudioContext;
   }
 
   async function speakWithVoice(voiceId, text, sampling, label) {
     if (!text || !text.trim()) { log("(no text for " + label + ")", "error"); return; }
-    const ac = ensureAudioContext();
+    const ac = await ensureAudioContext();
+    console.debug("lab: ac state=%s rate=%d", ac.state, ac.sampleRate);
     activeNextStartTime = ac.currentTime;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = proto + "://" + location.host + "/v1/tts/stream";
@@ -282,14 +305,21 @@
             resolve({ firstAudioMs: null, totalMs: null, sentences, error: event.detail });
           }
         } else {
-          if (firstAudioMs === null) firstAudioMs = performance.now() - t0;
+          if (firstAudioMs === null) {
+            firstAudioMs = performance.now() - t0;
+            console.debug("lab: first frame ac.state=%s bytes=%d", ac.state, ev.data.byteLength);
+          }
           const pcm = new Float32Array(ev.data);
-          const buf = ac.createBuffer(1, pcm.length, ac.sampleRate);
+          const buf = ac.createBuffer(1, pcm.length, PCM_SAMPLE_RATE);
           buf.copyToChannel(pcm, 0);
           const src = ac.createBufferSource();
           src.buffer = buf;
           src.connect(ac.destination);
-          const startAt = Math.max(ac.currentTime, activeNextStartTime);
+          // 50ms cushion past currentTime — scheduling exactly at currentTime
+          // can race the audio thread on some implementations and produce a
+          // dropped first frame, particularly when the context just resumed.
+          const earliest = ac.currentTime + 0.05;
+          const startAt = Math.max(earliest, activeNextStartTime);
           src.start(startAt);
           activeNextStartTime = startAt + buf.duration;
         }
