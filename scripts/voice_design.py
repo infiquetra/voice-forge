@@ -36,7 +36,6 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import wave
 from pathlib import Path
@@ -56,7 +55,9 @@ from voice_forge.voice_design import (  # noqa: E402
     PersonaSpec,
     audition_persona,
     build_voice_design_prompt,
+    generate_previews_only,
     load_fleet,
+    persist_preview,
     pick_auto,
     pick_interactive,
     text_to_speech,
@@ -150,12 +151,23 @@ def cmd_audition(args: argparse.Namespace) -> int:
     personas = _select_personas(fleet, args)
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    picker = pick_auto if args.auto else pick_interactive
 
     # api_key=None triggers _resolve_api_key's full chain: env var → vault.
-    # We pass through so audition + regen both honor the vault.
     api_key = None
 
+    # Save-only mode: generate previews to disk + exit. No interactive picker
+    # (works in headless / agent-driven shells). User runs `persist` afterwards.
+    if args.save_only:
+        for spec in personas:
+            generate_previews_only(
+                spec,
+                out_dir=out_dir,
+                api_key=api_key,
+                sample_text_override=args.text,
+            )
+        return 0
+
+    picker = pick_auto if args.auto else pick_interactive
     results: list[tuple[str, str | None]] = []
     for spec in personas:
         try:
@@ -179,6 +191,36 @@ def cmd_audition(args: argparse.Namespace) -> int:
     for vid, persisted in results:
         print(f"  {vid}: {persisted or '(skipped)'}")
     return 0 if all(p for _, p in results) else 1
+
+
+# ----- subcommand: persist -----
+
+
+def cmd_persist(args: argparse.Namespace) -> int:
+    """Finalize a save-only audition: turn one of the 3 previews into a real voice."""
+    fleet_path = Path(args.fleet).expanduser().resolve()
+    fleet = load_fleet(fleet_path)
+    personas = _select_personas(fleet, args)
+    if len(personas) != 1:
+        sys.exit("persist supports one persona at a time (omit --all)")
+    spec = personas[0]
+    out_dir = Path(args.out_dir).expanduser().resolve()
+
+    try:
+        res = persist_preview(
+            spec,
+            preview_index=args.preview,
+            out_dir=out_dir,
+            api_key=None,
+        )
+    except FileNotFoundError as e:
+        sys.exit(str(e))
+    except IndexError as e:
+        sys.exit(str(e))
+
+    if res.persisted_voice_id and not args.dry_run_writeback:
+        _write_back_fleet(fleet_path, spec.voice_id, res.persisted_voice_id)
+    return 0
 
 
 # ----- subcommand: regen -----
@@ -283,7 +325,40 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Persist voice via ElevenLabs but do NOT write voice_id back to fleet.yaml",
     )
+    p_audition.add_argument(
+        "--save-only",
+        action="store_true",
+        help=(
+            "Generate 3 previews to disk + write a JSON manifest, then exit. No interactive "
+            "picker, no persistence. Use when running headless / from a background agent. "
+            "Follow up with `persist --persona <id> --preview <N>` once you've listened."
+        ),
+    )
     p_audition.set_defaults(func=cmd_audition)
+
+    p_persist = sub.add_parser(
+        "persist",
+        parents=[common_persona],
+        help="Finalize a save-only audition by persisting one preview",
+    )
+    p_persist.add_argument("--fleet", required=True, help="Path to fleet.yaml")
+    p_persist.add_argument(
+        "--out-dir",
+        default=str(AUDIT_DEFAULT_DIR),
+        help=f"Where preview MP3s + manifest live (default: {AUDIT_DEFAULT_DIR})",
+    )
+    p_persist.add_argument(
+        "--preview",
+        type=int,
+        required=True,
+        help="Which preview to persist (1-based index, matches saved MP3 filename)",
+    )
+    p_persist.add_argument(
+        "--dry-run-writeback",
+        action="store_true",
+        help="Persist via ElevenLabs but do NOT write voice_id back to fleet.yaml",
+    )
+    p_persist.set_defaults(func=cmd_persist)
 
     p_regen = sub.add_parser(
         "regen",

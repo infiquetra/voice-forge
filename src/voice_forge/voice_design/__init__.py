@@ -42,7 +42,14 @@ examples in full.
 
 from __future__ import annotations
 
-from .audition import AuditionResult, audition_persona, pick_auto, pick_interactive
+from .audition import (
+    AuditionResult,
+    audition_persona,
+    generate_previews_only,
+    persist_preview,
+    pick_auto,
+    pick_interactive,
+)
 from .elevenlabs import (
     ElevenLabsError,
     Preview,
@@ -66,6 +73,8 @@ __all__ = [
     "Preview",
     "audition_persona",
     "build_voice_design_prompt",
+    "generate_previews_only",
+    "persist_preview",
     "create_voice_from_preview",
     "create_voice_previews",
     "load_fleet",
