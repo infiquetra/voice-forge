@@ -27,8 +27,10 @@ import subprocess
 import tempfile
 import wave
 from collections.abc import Iterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -36,8 +38,9 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import __version__, config, metrics
+from . import __version__, config, lab_state, metrics
 from .backends import available_backends, get_backend, known_backends, load_backend_module
+from .persona_coverage import ensure_full_coverage
 from .registry import Registry
 from .sentence_buffer import SentenceBuffer
 
@@ -63,10 +66,45 @@ logging.basicConfig(level=os.environ.get("VOICE_FORGE_LOG_LEVEL", "INFO").upper(
 SAMPLE_RATE = 24_000
 
 
+FLEET_PATH_ENV = "VOICE_FORGE_FLEET_PATH"
+DEFAULT_FLEET_PATH = Path("tests/functional/fleet.yaml")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Server-wide startup + shutdown hooks.
+
+    On startup: run ``ensure_full_coverage`` against fleet.yaml so the
+    /lab persona × backend matrix is fully populated. No-op when
+    fleet.yaml is absent (the case for outside-user installs).
+    """
+    fleet_path = Path(os.environ.get(FLEET_PATH_ENV, str(DEFAULT_FLEET_PATH))).expanduser()
+    try:
+        summary = ensure_full_coverage(_registry(), fleet_path)
+        if "skipped" in summary:
+            logger.info("persona coverage: %s", summary["skipped"])
+        else:
+            logger.info(
+                "persona coverage: created=%d, skipped_existing=%d, "
+                "skipped_missing_ref=%d, skipped_backend_not_installed=%s",
+                len(summary["created"]),
+                len(summary["skipped_existing"]),
+                len(summary["skipped_missing_ref"]),
+                summary["skipped_backend_not_installed"],
+            )
+    except Exception:
+        # ensure_full_coverage is non-essential; don't block server startup
+        # on a registry quirk. Log + continue.
+        logger.exception("ensure_full_coverage failed at startup; continuing")
+    yield
+    # No shutdown work today; placeholder for future cleanup hooks.
+
+
 app = FastAPI(
     title="voice-forge",
     version=__version__,
     description="Pluggable TTS service for agent voices",
+    lifespan=lifespan,
 )
 
 
@@ -714,6 +752,168 @@ async def delete_voice(voice_id: str):
     registry = _registry()
     registry.delete(voice_id)
     return Response(status_code=204)
+
+
+# ---- /lab persistence layer ----
+
+
+class ScorecardCellRequest(BaseModel):
+    """PUT body for /v1/scorecard/{persona}/{backend}."""
+
+    matches_original: Literal["yes", "no", "partial"] | None = None
+    notes: str | None = None
+
+
+class PersonaPromptsRequest(BaseModel):
+    """PUT body for /v1/personas/prompts/{persona}. All three lengths required.
+
+    Three lengths is the contract: short = clone-match check, medium =
+    persona intro, long = narrative stress test. UI never sends partial
+    updates — Save writes all three.
+    """
+
+    short: str
+    medium: str
+    long: str
+
+
+@app.get("/v1/scorecard")
+async def get_scorecard() -> dict:
+    """Return the full scorecard. Keyed by persona then backend."""
+    return lab_state.read_scorecard()
+
+
+@app.put("/v1/scorecard/{persona}/{backend}")
+async def put_scorecard_cell(persona: str, backend: str, req: ScorecardCellRequest) -> dict:
+    """Merge an update into one (persona, backend) scorecard cell.
+
+    Either field may be omitted — only the keys you send are updated.
+    Pass ``matches_original=null`` explicitly to clear that field.
+    """
+    try:
+        cell = lab_state.update_scorecard_cell(
+            persona,
+            backend,
+            matches_original=req.matches_original,
+            notes=req.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return cell
+
+
+@app.get("/v1/personas/prompts")
+async def get_personas_prompts() -> dict:
+    """Return the full per-persona prompts dict."""
+    return lab_state.read_persona_prompts()
+
+
+@app.put("/v1/personas/prompts/{persona}")
+async def put_persona_prompts(persona: str, req: PersonaPromptsRequest) -> dict:
+    """Replace the prompts block for one persona (short/medium/long)."""
+    try:
+        block = lab_state.update_persona_prompts(
+            persona, short=req.short, medium=req.medium, long=req.long
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return block
+
+
+class PresetSampleRequest(BaseModel):
+    """POST body for /v1/presets/{backend}/sample."""
+
+    preset_id: str
+    text: str = "Can you hear me?"
+
+
+@app.get("/v1/presets/{backend}")
+async def list_presets(backend: str) -> dict:
+    """Return the backend's KNOWN_PRESETS catalog (id + language + gender + label).
+
+    Works for any backend whose module imports — even when its subprocess
+    venv isn't provisioned yet, so the UI can show the menu before install.
+    Returns 404 if the backend is unknown OR doesn't declare KNOWN_PRESETS.
+    """
+    if backend not in known_backends():
+        raise HTTPException(
+            status_code=404, detail=f"unknown backend {backend!r}; known: {known_backends()}"
+        )
+    try:
+        load_backend_module(backend)
+    except (ImportError, KeyError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"backend {backend!r} module not importable: {exc!r}",
+        ) from exc
+    cls = get_backend(backend)
+    presets = getattr(cls, "KNOWN_PRESETS", None)
+    if presets is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"backend {backend!r} has no KNOWN_PRESETS (not a preset backend?)",
+        )
+    return {"backend": backend, "data": presets}
+
+
+@app.post("/v1/presets/{backend}/sample")
+async def sample_preset(backend: str, req: PresetSampleRequest) -> Response:
+    """Synthesize a one-shot sample from a backend preset without touching the registry.
+
+    Used by /lab's preset browser so you can audition all 54 Kokoro presets
+    (or 20 Piper voices, etc.) without registering them. Returns the WAV
+    as audio/wav.
+
+    503 if the backend's subprocess venv isn't provisioned
+    (`voice-forge backend install <name>`).
+    """
+    if backend not in known_backends():
+        raise HTTPException(
+            status_code=404, detail=f"unknown backend {backend!r}; known: {known_backends()}"
+        )
+    try:
+        backend_inst = _ensure_backend(backend)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"backend load failed: {exc!r}") from exc
+
+    # Build a transient VoiceRef — preset_id set, no registry write.
+    from .backends import VoiceRef as _VoiceRef
+
+    transient_ref = _VoiceRef(
+        voice_id=f"__preset_sample__{backend}_{req.preset_id}",
+        backend=backend,
+        preset_id=req.preset_id,
+        metadata={"language": "en"},
+    )
+    try:
+        audio = await run_in_threadpool(backend_inst.synthesize, req.text, transient_ref)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"preset sample synth failed: {exc!r}") from exc
+    wav_bytes = _samples_to_wav_bytes(audio)
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+
+@app.get("/v1/voices/{voice_id}/reference")
+async def get_voice_reference(voice_id: str) -> FileResponse:
+    """Serve the clone-source ref.wav for a voice.
+
+    Used by /lab so reviewers can A/B the clone against the source audio.
+    Returns 404 when the voice doesn't have a ref WAV — typical for
+    preset-only backends (kokoro, piper, melotts).
+    """
+    registry = _registry()
+    try:
+        v = registry.get(voice_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    if not v.ref_audio_path or not Path(v.ref_audio_path).is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"voice {voice_id!r} has no reference audio (preset-only backend?)",
+        )
+    return FileResponse(v.ref_audio_path, media_type="audio/wav")
 
 
 # ---- Live in-browser WS demo ----

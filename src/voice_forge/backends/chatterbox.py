@@ -102,6 +102,12 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
         def health(self) -> dict:
             return {"name": self.name, "loaded": self._model is not None}
 
+        def unload(self) -> None:
+            import gc
+
+            self._model = None
+            gc.collect()
+
     register_backend("chatterbox", _ChatterboxInProcess)
 else:
     register_backend("chatterbox", ChatterboxBackend)

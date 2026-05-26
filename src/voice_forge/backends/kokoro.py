@@ -41,6 +41,7 @@ import numpy as np
 
 from . import VoiceRef, register_backend
 from ._mixing import parse_mix
+from ._presets import KOKORO_PRESETS
 
 logger = logging.getLogger("voice_forge.backends.kokoro")
 
@@ -61,6 +62,8 @@ class KokoroBackend:
             "description": "Playback rate; KPipeline honors this directly.",
         },
     }
+
+    KNOWN_PRESETS = KOKORO_PRESETS
 
     def __init__(self) -> None:
         self._pipeline: Any = None

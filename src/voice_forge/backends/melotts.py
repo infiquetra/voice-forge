@@ -20,6 +20,7 @@ from collections.abc import Iterator
 import numpy as np
 
 from . import VoiceRef, register_backend
+from ._presets import MELOTTS_PRESETS
 from ._subprocess import SubprocessBackend
 
 logger = logging.getLogger("voice_forge.backends.melotts")
@@ -29,6 +30,8 @@ class MeloTTSBackend(SubprocessBackend):
     """MeloTTS multilingual subprocess backend."""
 
     name = "melotts"
+
+    KNOWN_PRESETS = MELOTTS_PRESETS
 
     KNOWN_TUNABLES = {
         "speed": {
@@ -115,6 +118,13 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
 
         def synthesize_stream(self, text: str, ref: VoiceRef) -> Iterator[np.ndarray]:
             yield self.synthesize(text, ref)
+
+        def unload(self) -> None:
+            import gc
+
+            self._model = None
+            self._speaker_ids = {}
+            gc.collect()
 
         def health(self) -> dict:
             return {

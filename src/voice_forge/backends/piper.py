@@ -21,6 +21,7 @@ from collections.abc import Iterator
 import numpy as np
 
 from . import VoiceRef, register_backend
+from ._presets import PIPER_PRESETS
 from ._subprocess import SubprocessBackend
 
 logger = logging.getLogger("voice_forge.backends.piper")
@@ -30,6 +31,8 @@ class PiperBackend(SubprocessBackend):
     """Piper-TTS subprocess backend."""
 
     name = "piper"
+
+    KNOWN_PRESETS = PIPER_PRESETS
 
     KNOWN_TUNABLES = {
         "length_scale": {
@@ -121,6 +124,12 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
 
         def health(self) -> dict:
             return {"name": self.name, "loaded": self._voice is not None}
+
+        def unload(self) -> None:
+            import gc
+
+            self._voice = None
+            gc.collect()
 
     register_backend("piper", _PiperInProcess)
 else:
