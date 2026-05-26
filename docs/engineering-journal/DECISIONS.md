@@ -21,6 +21,34 @@
 
 ---
 
+## 2026-05-26
+
+### F5 nfe_step default flipped from 32 → 16 (commit pending)
+
+**Decision.** F5's `DEFAULT_NFE_STEP` is now **16**, not 32. Voices without an explicit `metadata.sampling.nfe_step` override get 16-step diffusion synthesis. The 32-step path is still reachable via `voice tune <id> --sampling nfe_step=32` for an explicit quality preset.
+
+The `*-fast` voices that were registered as nfe_step=16 variants (`saga-comms-f5-fast`, `heid-research-f5-fast`, `hnoss-books-f5-fast`) are deleted from the audition registry — redundant now that 16 is the parent default.
+
+**Rejected alternatives.**
+
+- **Keep 32 as default; expose 16 only as opt-in.** Was the original recommendation in [DECISIONS 2026-05-25 § F5-TTS is the default backend](DECISIONS.md). The hesitation was unproven quality cost. Quality has now been validated on the 11-sentence Saga narrative as audibly indistinguishable. The user has explicitly endorsed flipping the default. Sticking with 32 means every default-setup voice eats 2× the synth wall-time for no audible payoff.
+- **Make the default conditional on streaming-vs-batch mode** (e.g., `nfe_step=16` for `stream=true`, `32` for `stream=false`). Splits the abstraction; introduces a quality-vs-mode coupling that's harder to reason about. Single value across both paths is simpler + the right call given the equivalence finding.
+
+**Rationale.**
+
+- 11-sentence stress test in the live WS demo (2026-05-25): listener could not distinguish the two settings.
+- Wall-time savings on F5 are substantial. p3 narrative (~995 chars / 11 sentences): batch first-audio drops from ~62 s (nfe=32) to ~30 s (nfe=16); WS first-audio drops from ~6 s to ~3 s.
+- "Pay the latency tax by default, opt into the quality cost" is the wrong direction for streaming-default voice-forge. Better: default to the streaming-friendly value, document the quality-preset path for callers who specifically care.
+
+**Revisit when.**
+
+- F5 upstream ships a distilled / consistency-trained variant where the quality/step curve flattens enough that the default could go lower (8 or 12). Re-run the equivalence test against the new variant.
+- A listener with golden ears reports an audible degradation on real content we haven't tested. Capture the test case + walk the value back up to 24 or 32 for that voice via the per-voice override.
+
+**Refs.** Commit pending (Phase X of `.claude/plans/2026-05-25-voice-lab-tuning-workstation.md`). Supersedes the "16 is the streaming preset" framing in [DECISIONS 2026-05-25 § F5-TTS is the default backend](DECISIONS.md). [LEARNINGS 2026-05-25 § F5 nfe_step=16](LEARNINGS.md) is the empirical foundation.
+
+---
+
 ## 2026-05-25
 
 ### F5-TTS is the default backend (commit pending — see git log for hash)

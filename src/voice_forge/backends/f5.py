@@ -34,7 +34,10 @@ from ._chunking import chunk_text
 logger = logging.getLogger("voice_forge.backends.f5")
 
 DEFAULT_MODEL = "F5TTS_v1_Base"
-DEFAULT_NFE_STEP = 32  # diffusion steps; lower → faster + lower quality
+# 16 is the default per DECISIONS 2026-05-26 (audibly indistinguishable from 32
+# on the 11-sentence long-form test; halves synth wall-time). Bump to 24-32 per
+# voice via metadata['sampling']['nfe_step'] for an explicit quality preset.
+DEFAULT_NFE_STEP = 16  # diffusion steps; lower → faster + lower quality
 DEFAULT_STREAM_CHUNK_CHARS = (
     1000  # large default; F5's quality benefits from longer context per call
 )
@@ -54,8 +57,8 @@ class F5Backend:
             "type": "int",
             "min": 8,
             "max": 64,
-            "default": 32,
-            "description": "Diffusion denoising steps. 32 = quality preset; 16 = streaming preset.",
+            "default": 16,
+            "description": "Diffusion denoising steps. 16 = default; 24-32 = quality preset.",
         },
         "cfg_strength": {
             "type": "float",

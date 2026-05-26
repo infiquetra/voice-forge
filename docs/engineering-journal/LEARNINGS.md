@@ -25,6 +25,26 @@
 
 ---
 
+## 2026-05-26
+
+### F5 nfe_step default flipped 32 → 16 — superseding the "streaming preset" framing
+
+**Context.** [LEARNINGS 2026-05-25 § F5 nfe_step=16](#f5-nfe_step16-is-audibly-equivalent-to-32-on-long-form-narrative-on-mac-studio) found that 16-step F5 synthesis was audibly indistinguishable from 32 on the 11-sentence Saga narrative. At that point we kept 32 as the F5 default and treated 16 as an opt-in "streaming preset" — out of conservatism, not data.
+
+**Evidence.** Today the user explicitly endorsed flipping the default after re-listening to the long-form A/B. The empirical finding from 2026-05-25 stands: no audible difference on real long-form content. The conservatism has nothing left to protect.
+
+**Mechanism.** Diffusion-step count maps roughly-linearly to wall-time per sentence. Halving steps halves the wall-time per synth call. On F5 long-form (~60 s narrative, 11 sentences), this is ~30 s saved vs the 32-step path. WS first-audio drops from ~6 s to ~3 s.
+
+**Fix.** `DEFAULT_NFE_STEP` in `src/voice_forge/backends/f5.py` flipped from 32 → 16. `KNOWN_TUNABLES["nfe_step"]["default"]` matches. The previous `*-fast` voices in the audition registry are deleted (they were nfe_step=16 variants — redundant with the new parent default). DECISIONS 2026-05-26 records the flip with full rationale.
+
+**What surprised.** Nothing new — this is just the consequence of trusting the 2026-05-25 finding. The thing that DID surprise me was how much friction "16 is the streaming preset, 32 is the default" caused in subsequent UX (the demo page picker showed `saga-comms-f5` + `saga-comms-f5-fast` as separate voices, the Lab plan needed to figure out how to collapse them, etc.). Carrying two voices for one persona-backend pairing where one is just "the default plus one knob override" was always going to be confusing. Better to bake the empirical default in.
+
+**Generalizable rule.** When an A/B test resolves a tradeoff cleanly (no audible difference; significant wall-time win), don't ship both options as first-class voices and let users pick. Bake the winner in as the default. Carrying both creates a UX tax forever; collapsing later is a one-time edit.
+
+**Refs.** Commit pending. Supersedes [LEARNINGS 2026-05-25 § F5 nfe_step=16] (still accurate empirically; the conclusion just moved one step forward). [DECISIONS 2026-05-26 § F5 nfe_step default flipped] is the formal lock-in.
+
+---
+
 ## 2026-05-25
 
 ### WS layer-2 pipelining via asyncio producer/consumer — receive task pulls text while consumer is mid-synth

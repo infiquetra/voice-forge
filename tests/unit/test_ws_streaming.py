@@ -327,7 +327,7 @@ def test_list_backends_returns_known_set_with_tunable_schemas(ws_setup):
         spec = f5_tunables["nfe_step"]
         assert spec["type"] == "int"
         assert spec["min"] <= 16 <= spec["max"]
-        assert spec["default"] == 32
+        assert spec["default"] == 16
 
 
 def test_list_voices_surfaces_persona(ws_setup):

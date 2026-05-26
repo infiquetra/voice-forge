@@ -39,7 +39,7 @@ def _voice_ref(**overrides):
 def test_load_sets_tts_with_defaults(f5_backend):
     assert f5_backend._tts is not None
     assert f5_backend._config["model"] == "F5TTS_v1_Base"
-    assert f5_backend._config["nfe_step"] == 32
+    assert f5_backend._config["nfe_step"] == 16
     assert f5_backend._config["device"] is None  # autodetect
 
 
@@ -61,7 +61,7 @@ def test_health_shape(f5_backend):
     assert h["loaded"] is True
     assert h["model"] == "F5TTS_v1_Base"
     assert h["device"] == "auto"
-    assert h["nfe_step"] == 32
+    assert h["nfe_step"] == 16
 
 
 def test_encode_reference_returns_none(f5_backend):
@@ -85,7 +85,7 @@ def test_synthesize_passes_ref_audio_and_text_to_f5(f5_backend):
     assert last["ref_file"] == "/the/ref.wav"
     assert last["ref_text"] == "ref text"
     assert last["gen_text"] == "Synthesize me."
-    assert last["nfe_step"] == 32
+    assert last["nfe_step"] == 16
 
 
 def test_synthesize_stream_single_sentence_one_chunk(f5_backend):
@@ -120,7 +120,7 @@ def test_synthesize_stream_default_chunk_size_keeps_short_input_one_call(f5_back
     assert len(chunks) == 1
     # And the single call should have used F5's default sampling
     last_call = f5_backend._tts.calls[-1]
-    assert last_call["nfe_step"] == 32  # backend default
+    assert last_call["nfe_step"] == 16  # backend default (was 32; flipped 2026-05-26)
 
 
 def test_missing_ref_audio_raises(f5_backend):
@@ -232,7 +232,7 @@ def test_no_sampling_block_uses_backend_defaults(f5_backend):
     assert "sampling" not in ref.metadata
     f5_backend.synthesize("text", ref)
     last = f5_backend._tts.calls[-1]
-    assert last["nfe_step"] == 32  # backend default
+    assert last["nfe_step"] == 16  # backend default (flipped 2026-05-26)
     # Optional sampling keys not present in the call
     assert "cfg_strength" not in last
     assert "seed" not in last
