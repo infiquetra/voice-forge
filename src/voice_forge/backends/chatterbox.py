@@ -60,6 +60,18 @@ class ChatterboxBackend(SubprocessBackend):
 # Inside the child venv, swap in the in-process impl (uses chatterbox-tts directly).
 # Sentinel env var avoids accidental import in the parent.
 if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
+    # Workaround: resemble-perth's API drifted such that the
+    # ``PerthImplicitWatermarker`` symbol is now ``None`` (the import-time
+    # initialization fails silently in some chatterbox-tts/perth versions).
+    # chatterbox.tts:125 calls ``perth.PerthImplicitWatermarker()`` →
+    # ``TypeError: 'NoneType' object is not callable``. Patch it to
+    # DummyWatermarker (same interface, no-op watermark) BEFORE importing
+    # chatterbox.tts. We don't need watermarking for voice-forge use.
+    # Documented in LEARNINGS 2026-05-25 § "Chatterbox audition".
+    import perth as _perth  # noqa: PLC0415
+
+    if _perth.PerthImplicitWatermarker is None:
+        _perth.PerthImplicitWatermarker = _perth.DummyWatermarker
     from chatterbox.tts import ChatterboxTTS  # noqa: PLC0415 — child-only
 
     class _ChatterboxInProcess:
@@ -72,11 +84,25 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
             self._model: ChatterboxTTS | None = None
 
         def load(self, config: dict) -> None:
-            device = config.get("device") or "auto"
+            # ChatterboxTTS dispatches to torch's .to(device), which doesn't
+            # accept "auto" — must be one of cpu/cuda/mps/etc. Resolve here
+            # so the caller can still pass "auto" as a UX shortcut.
+            requested = config.get("device") or "auto"
+            if requested == "auto":
+                import torch
+
+                if torch.cuda.is_available():
+                    device = "cuda"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    device = "mps"
+                else:
+                    device = "cpu"
+            else:
+                device = requested
             self._model = ChatterboxTTS.from_pretrained(
                 device=device
             )  # nosec B615 — revision pin queued
-            logger.info("chatterbox child loaded (device=%s)", device)
+            logger.info("chatterbox child loaded (device=%s, requested=%s)", device, requested)
 
         def encode_reference(self, _ref_audio_path: str) -> list | None:
             return None

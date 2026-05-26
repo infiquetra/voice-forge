@@ -81,7 +81,21 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
 
         def load(self, config: dict) -> None:
             language = config.get("language", "EN")
-            device = config.get("device", "auto")
+            # MeloTTS's TTS() accepts a torch device string. "auto" works in
+            # newer versions but not the 0.1.x line currently installable;
+            # resolve explicitly for safety.
+            requested = config.get("device") or "auto"
+            if requested == "auto":
+                import torch
+
+                if torch.cuda.is_available():
+                    device = "cuda"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    device = "mps"
+                else:
+                    device = "cpu"
+            else:
+                device = requested
             self._model = TTS(language=language, device=device)
             self._speaker_ids = self._model.hps.data.spk2id
             logger.info(
