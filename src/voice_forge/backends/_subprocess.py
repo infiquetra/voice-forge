@@ -94,7 +94,12 @@ logger = logging.getLogger("voice_forge.backends._subprocess")
 
 DEFAULT_BACKEND_ROOT = Path("~/.voice-forge/backends").expanduser()
 SHIM_BIND_HOST = "127.0.0.1"
-HEALTH_POLL_TIMEOUT_SEC = 60.0  # shim cold-start can take 30-45s on first run
+# Cold-start the FIRST time a backend boots may include a model download
+# (Chatterbox: ~1-2 GB from HF; Piper: ~50 MB ONNX per voice). 5 min keeps
+# us friendly with slow networks; subsequent loads reuse the cache and
+# typically finish in 20-40 s. Bumped from the original 60s after seeing
+# the chatterbox HF download orphan dozens of children at the lower limit.
+HEALTH_POLL_TIMEOUT_SEC = 300.0
 HEALTH_POLL_INTERVAL_SEC = 0.5
 
 
@@ -147,7 +152,14 @@ class SubprocessBackend:
     # ----- TTSBackend Protocol -----
 
     def load(self, config: dict) -> None:
-        """Spawn the child shim + wait for its health endpoint."""
+        """Spawn the child shim + wait for its health endpoint.
+
+        If a previous load attempt left a child running (e.g. health timeout
+        before client retry), kill it before spawning a fresh one. Prevents
+        orphan accumulation during cold-load retries.
+        """
+        if self._proc is not None:
+            self.shutdown()
         backends_root = Path(config.get("backends_root") or DEFAULT_BACKEND_ROOT).expanduser()
         venv_path = _backend_venv_path(self.name, backends_root)
         state_path = _backend_state_path(self.name, backends_root)
@@ -187,6 +199,18 @@ class SubprocessBackend:
         # Extra config keys flow to the child via env (simpler than
         # rebuilding a config-CLI for every backend).
         env = os.environ.copy()
+        # Some ML libraries (torch / transformers / f5_tts) write
+        # PYTHONHASHSEED into os.environ at import time for "reproducibility".
+        # The value they pick can be outside Python's accepted range
+        # ([0, 4294967295]) which causes the CHILD interpreter to crash at
+        # startup with "PYTHONHASHSEED must be 'random' or an integer in
+        # range [0; 4294967295]". Strip it — the child generates its own
+        # at startup, and we don't need cross-process hash compatibility.
+        env.pop("PYTHONHASHSEED", None)
+        # Same hygiene for PYTHONSTARTUP — could point at a script not in
+        # the child venv. Other PYTHON* vars (PYTHONPATH etc) we leave
+        # alone since they're useful when set.
+        env.pop("PYTHONSTARTUP", None)
         for k, v in (config or {}).items():
             if k != "backends_root" and isinstance(v, str | int | float | bool):
                 env[f"VOICE_FORGE_BACKEND_CONFIG_{k.upper()}"] = str(v)
@@ -209,9 +233,11 @@ class SubprocessBackend:
                 stderr = b""
                 if self._proc.stderr:
                     stderr = self._proc.stderr.read()
+                self._proc = None
+                self._port = None
                 raise RuntimeError(
                     f"[{self.name}] shim exited before healthy "
-                    f"(rc={self._proc.returncode}); stderr={stderr.decode(errors='replace')[:500]}"
+                    f"(rc=?); stderr={stderr.decode(errors='replace')[:500]}"
                 )
             try:
                 req = urllib.request.Request(f"http://{SHIM_BIND_HOST}:{self._port}/health")
@@ -221,9 +247,24 @@ class SubprocessBackend:
             except (urllib.error.URLError, ConnectionRefusedError, OSError) as exc:
                 last_err = exc
             time.sleep(HEALTH_POLL_INTERVAL_SEC)
+        # Timeout. Kill the child so it doesn't sit there as a zombie eating
+        # RAM (each chatterbox child can hold 1-2 GB of partially-loaded
+        # torch state). Then surface the failure.
+        timed_out_proc = self._proc
+        self._proc = None
+        self._port = None
+        if timed_out_proc is not None:
+            try:
+                timed_out_proc.terminate()
+                timed_out_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                timed_out_proc.kill()
+                timed_out_proc.wait()
+            except ProcessLookupError:
+                pass
         raise RuntimeError(
-            f"[{self.name}] shim never became healthy on port {self._port} "
-            f"after {HEALTH_POLL_TIMEOUT_SEC}s (last error: {last_err!r})"
+            f"[{self.name}] shim never became healthy on port (last error: {last_err!r}); "
+            f"after {HEALTH_POLL_TIMEOUT_SEC}s. Child process terminated."
         )
 
     def encode_reference(self, _ref_audio_path: str) -> list | None:
