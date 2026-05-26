@@ -91,6 +91,88 @@ OpenAI-compatible listing endpoint.
 
 ### `GET /voices/{voice_id}` — Get metadata
 
+## Backend lifecycle management (v0.3)
+
+Runtime control for which backends are loaded in memory. Pairs with the lazy-load behavior of `_ensure_backend()` — by default a backend only loads on first synth call for one of its voices; these endpoints let you preempt (warm at boot) or reverse (evict to reclaim RAM) that.
+
+### `GET /v1/backends` — list backends + runtime state
+
+Already covered in the demo-knob-panel section above; the response now also carries:
+
+```jsonc
+{
+  "name": "f5",
+  "installed": true,
+  "loaded": true,         // ← in-memory right now (consuming RSS)
+  "is_default": true,     // ← what new voices default to
+  "tunables": {...}
+}
+```
+
+### `POST /v1/backends/{name}/load` — warm a backend without a synth call
+
+```jsonc
+{
+  "backend": "kokoro",
+  "action": "loaded",       // or "already_loaded" — idempotent
+  "affected_backends": ["kokoro"],
+  "rss_before_mb": 71.7,
+  "rss_after_mb": 1500.8,
+  "reclaimed_mb": -1429.1   // negative = RSS grew (memory was added)
+}
+```
+
+Useful at boot to amortize cold-load latency. Returns 404 if the backend isn't installed.
+
+### `POST /v1/backends/{name}/unload` — release a backend's memory
+
+```jsonc
+{
+  "backend": "kokoro",
+  "action": "unloaded",      // or "already_unloaded" — idempotent
+  "affected_backends": ["kokoro"],
+  "rss_before_mb": 1500.8,
+  "rss_after_mb": 1213.8,
+  "reclaimed_mb": 287.0      // positive = RSS dropped
+}
+```
+
+**Honest about partial reclamation.** Realistic recovery is 20-90% of the backend's resident set depending on backend + framework caches. PyTorch MPS allocator, HuggingFace cache pages, and shared library state persist until process restart. For full reclamation, restart `voice-forge serve` (~3 s boot). The endpoint reports actual measured `reclaimed_mb` so callers can decide if a restart is warranted.
+
+### `DELETE /v1/backends/loaded` — unload every loaded backend
+
+```jsonc
+{
+  "backend": null,
+  "action": "reset",
+  "affected_backends": ["f5", "kokoro"],
+  "rss_before_mb": 2900.5,
+  "rss_after_mb": 1450.2,
+  "reclaimed_mb": 1450.3
+}
+```
+
+Equivalent to calling unload on each loaded backend in sequence.
+
+### `PUT /v1/backends/default` — change the system default backend
+
+```jsonc
+// request
+{"backend": "kokoro"}
+
+// response
+{"default_backend": "kokoro"}
+```
+
+Persisted to `~/.voice-forge/config.json` so the change survives process restart. Affects:
+- The default for new voice registrations via `POST /voices/{id}` and `POST /voices/from-elevenlabs` when no `backend=` is passed
+- The default for `voice-forge voice add` and `voice-forge voice from-elevenlabs` when no `--backend` is passed
+- The fallback the registry uses when reading a legacy `metadata.json` that doesn't carry a `backend` field
+
+Does NOT re-route already-registered voices — they keep whatever backend their `metadata.json` specifies.
+
+Returns 400 if the requested backend isn't in `known_backends()`.
+
 ### `GET /metrics` — Prometheus scrape endpoint
 
 Prometheus exposition format (`Content-Type: text/plain; version=0.0.4; charset=utf-8`). Auth-exempt — monitoring infrastructure scrapes without needing a token.

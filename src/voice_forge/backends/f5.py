@@ -217,6 +217,25 @@ class F5Backend:
             "nfe_step": self._config.get("nfe_step", DEFAULT_NFE_STEP),
         }
 
+    def unload(self) -> None:
+        """Release F5's model state. Drops the F5TTS instance + flushes MPS cache."""
+        import gc
+
+        if self._tts is None:
+            return
+        with self._lock:
+            self._tts = None
+        gc.collect()
+        try:
+            import torch
+
+            if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            elif torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except (ImportError, AttributeError):
+            pass
+
 
 # Auto-register at import time.
 register_backend("f5", F5Backend)

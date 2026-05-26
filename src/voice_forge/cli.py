@@ -254,7 +254,13 @@ def _parse_sampling_kv(items: tuple[str, ...]) -> dict:
     default=None,
     help="Preset voice name for backends that don't use ref audio (e.g. kokoro 'af_bella')",
 )
-@click.option("--backend", default="f5", show_default=True)
+@click.option(
+    "--backend",
+    default=lambda: __import__(
+        "voice_forge.config", fromlist=["get_default_backend"]
+    ).get_default_backend(),
+    show_default="(configurable; see config.json or PUT /v1/backends/default)",
+)
 @click.option("--language", default="en", show_default=True)
 @click.option("--description", default="")
 @click.option(
@@ -392,7 +398,13 @@ def voice_tune(
 @click.argument("voice_id")
 @click.option("--elevenlabs-voice-id", required=True, help="Source voice in ElevenLabs")
 @click.option("--api-key", default=None, help="ElevenLabs API key (or set ELEVENLABS_API_KEY env)")
-@click.option("--backend", default="f5", show_default=True)
+@click.option(
+    "--backend",
+    default=lambda: __import__(
+        "voice_forge.config", fromlist=["get_default_backend"]
+    ).get_default_backend(),
+    show_default="(configurable; see config.json or PUT /v1/backends/default)",
+)
 @click.option("--max-seconds", default=14.0, type=float, show_default=True)
 @click.option("--no-trim", is_flag=True, help="Skip sentence-boundary trim; use full preview")
 @click.option("--language", default="en", show_default=True)

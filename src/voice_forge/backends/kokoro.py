@@ -121,6 +121,22 @@ class KokoroBackend:
         sampling = ref.metadata.get("sampling") or {}
         return float(sampling.get("speed", 1.0))
 
+    def unload(self) -> None:
+        """Release Kokoro's KPipeline + flush MPS cache if torch is loaded."""
+        import gc
+
+        if self._pipeline is None:
+            return
+        self._pipeline = None
+        gc.collect()
+        try:
+            import torch
+
+            if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except (ImportError, AttributeError):
+            pass
+
     def health(self) -> dict:
         return {
             "name": self.name,

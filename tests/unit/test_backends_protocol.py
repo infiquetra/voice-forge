@@ -57,6 +57,9 @@ def test_runtime_checkable_protocol_accepts_compliant_class():
         def health(self):
             return {}
 
+        def unload(self) -> None:
+            return None
+
     assert isinstance(FakeBackend(), TTSBackend)
 
 
@@ -66,6 +69,9 @@ def test_register_and_lookup_backend():
         KNOWN_TUNABLES: dict = {}
 
         def load(self, config): ...
+        def unload(self) -> None:
+            return None
+
         def encode_reference(self, ref):
             return None
 

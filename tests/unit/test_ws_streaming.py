@@ -52,6 +52,9 @@ class FakeWSBackend:
     def health(self) -> dict:  # pragma: no cover
         return {"name": self.name, "loaded": True}
 
+    def unload(self) -> None:  # pragma: no cover — exercised only by lifecycle tests
+        return None
+
 
 @pytest.fixture
 def ws_setup(tmp_path, monkeypatch):
@@ -75,9 +78,14 @@ def ws_setup(tmp_path, monkeypatch):
     # Pre-cache the fake backend so _ensure_backend() short-circuits the
     # canonical backend-registry dispatch.
     from voice_forge import server
+    from voice_forge.backends import _BACKEND_MODULES
 
     fake = FakeWSBackend()
     monkeypatch.setitem(server._BACKENDS, "fake-ws", fake)
+    # Make "fake-ws" appear in known_backends() so the lifecycle endpoints
+    # accept it. Module path doesn't matter because the backend is already
+    # cached in _BACKENDS so load_backend_module() never runs.
+    monkeypatch.setitem(_BACKEND_MODULES, "fake-ws", "tests._stubs.unused")
 
     client = TestClient(server.app)
     return client, fake
@@ -380,6 +388,98 @@ def test_metrics_ws_active_connections_tracks_open_sockets(ws_setup):
         during == (initial or 0) + 1
     ), f"expected gauge to go up; initial={initial} during={during}"
     assert after == initial, f"expected gauge back to initial; initial={initial} after={after}"
+
+
+def test_load_endpoint_warms_a_backend(ws_setup):
+    """POST /v1/backends/<name>/load loads the backend without needing a synth call."""
+    client, _ = ws_setup
+    # _BACKENDS already contains fake-ws from the ws_setup fixture; assert that
+    # /load reports "already_loaded" instead of double-loading.
+    resp = client.post("/v1/backends/fake-ws/load")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["backend"] == "fake-ws"
+    assert body["action"] == "already_loaded"
+    assert body["affected_backends"] == ["fake-ws"]
+    assert body["reclaimed_mb"] == 0.0
+
+
+def test_load_endpoint_unknown_backend_404(ws_setup):
+    client, _ = ws_setup
+    resp = client.post("/v1/backends/does-not-exist/load")
+    assert resp.status_code == 404
+
+
+def test_unload_endpoint_releases_loaded_backend(ws_setup):
+    """POST /v1/backends/<name>/unload calls backend.unload() and reports RSS delta."""
+    client, fake = ws_setup
+    # Confirm it's loaded first
+    list_before = client.get("/v1/backends").json()
+    fake_entry = next(b for b in list_before["data"] if b["name"] == "fake-ws")
+    assert fake_entry["loaded"] is True
+
+    resp = client.post("/v1/backends/fake-ws/unload")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["backend"] == "fake-ws"
+    assert body["action"] == "unloaded"
+    assert body["affected_backends"] == ["fake-ws"]
+    # RSS measurements should be present (psutil is in deps)
+    assert body["rss_before_mb"] is not None
+    assert body["rss_after_mb"] is not None
+    assert body["reclaimed_mb"] is not None
+
+    # Second unload is idempotent
+    resp2 = client.post("/v1/backends/fake-ws/unload")
+    assert resp2.json()["action"] == "already_unloaded"
+
+
+def test_delete_loaded_endpoint_unloads_all(ws_setup):
+    """DELETE /v1/backends/loaded unloads every loaded backend."""
+    client, _ = ws_setup
+    resp = client.delete("/v1/backends/loaded")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["action"] == "reset"
+    assert "fake-ws" in body["affected_backends"]
+    # Subsequent DELETE on empty is a no-op (zero affected_backends)
+    resp2 = client.delete("/v1/backends/loaded")
+    assert resp2.json()["affected_backends"] == []
+
+
+def test_put_default_persists_to_config_and_surfaces_via_get(ws_setup, tmp_path, monkeypatch):
+    """PUT /v1/backends/default writes the config + GET /v1/backends reflects is_default."""
+    # Sandbox the config file
+    monkeypatch.setenv("VOICE_FORGE_CONFIG_DIR", str(tmp_path / "vf-config"))
+    client, _ = ws_setup
+    # baseline: f5 is the hardcoded fallback when config file doesn't exist
+    baseline = client.get("/v1/backends").json()
+    f5_row = next(b for b in baseline["data"] if b["name"] == "f5")
+    assert f5_row["is_default"] is True
+
+    # Flip to kokoro
+    resp = client.put("/v1/backends/default", json={"backend": "kokoro"})
+    assert resp.status_code == 200
+    assert resp.json()["default_backend"] == "kokoro"
+
+    after = client.get("/v1/backends").json()
+    kokoro_row = next(b for b in after["data"] if b["name"] == "kokoro")
+    f5_row_after = next(b for b in after["data"] if b["name"] == "f5")
+    assert kokoro_row["is_default"] is True
+    assert f5_row_after["is_default"] is False
+
+    # And it's persisted to disk
+    config_file = tmp_path / "vf-config" / "config.json"
+    assert config_file.is_file()
+    import json as _json
+
+    assert _json.loads(config_file.read_text())["default_backend"] == "kokoro"
+
+
+def test_put_default_rejects_unknown_backend(ws_setup):
+    client, _ = ws_setup
+    resp = client.put("/v1/backends/default", json={"backend": "does-not-exist"})
+    assert resp.status_code == 400
 
 
 def test_demo_page_is_served(ws_setup):

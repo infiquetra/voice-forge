@@ -322,3 +322,13 @@ class SubprocessBackend:
             pass
         self._proc = None
         self._port = None
+
+    def unload(self) -> None:
+        """Alias for shutdown — fits the TTSBackend.unload contract.
+
+        For subprocess backends, "unload" means killing the child process —
+        which releases ALL of its model state including framework caches the
+        in-process backends can't reach. This is the cleanest unload of any
+        backend type.
+        """
+        self.shutdown()

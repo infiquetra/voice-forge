@@ -293,6 +293,26 @@ class DiaBackend:
         for chunk in chunks:
             yield self.synthesize(chunk, ref)
 
+    def unload(self) -> None:
+        """Release Dia's model + processor + flush MPS cache."""
+        import gc
+
+        if self._model is None and self._processor is None:
+            return
+        with self._lock:
+            self._model = None
+            self._processor = None
+        gc.collect()
+        try:
+            import torch
+
+            if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            elif torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except (ImportError, AttributeError):
+            pass
+
     def health(self) -> dict:
         return {
             "name": self.name,

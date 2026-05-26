@@ -107,6 +107,23 @@ class TTSBackend(Protocol):
         """Return diagnostics. Suggested keys: model, device, loaded (bool), warm (bool)."""
         ...
 
+    def unload(self) -> None:
+        """Release model state held by this backend instance.
+
+        Implementations should ``del`` their model/pipeline/processor refs,
+        ``gc.collect()``, and ask the underlying framework to drop cached
+        device memory (``torch.mps.empty_cache()`` / ``torch.cuda.empty_cache()``
+        where applicable). Idempotent — calling ``unload()`` on an already-
+        unloaded backend should be a no-op.
+
+        Realistic recovery is ~70-90% of the backend's resident memory.
+        Framework caches (PyTorch MPS allocator, HuggingFace cache pages,
+        loaded shared libraries) persist until process restart. The
+        management endpoint reports actual reclaimed bytes so callers see
+        the residual.
+        """
+        ...
+
 
 # Registry of installed backend classes, populated by register_backend()
 # at import time of each backend module.

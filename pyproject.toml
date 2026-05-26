@@ -33,6 +33,7 @@ dependencies = [
     "click>=8.1",
     "python-multipart>=0.0.9",  # FastAPI File/Form deps
     "prometheus-client>=0.20",  # /metrics endpoint
+    "psutil>=5.9",              # RSS measurement for backend load/unload reporting
 ]
 
 [project.optional-dependencies]

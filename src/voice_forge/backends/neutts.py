@@ -173,6 +173,16 @@ class NeuTTSBackend:
             for chunk in chunks:
                 yield from self._tts.infer_stream(chunk, codes, ref_text)
 
+    def unload(self) -> None:
+        """Release NeuTTS's underlying Llama + codec models."""
+        import gc
+
+        if self._tts is None:
+            return
+        with self._lock:
+            self._tts = None
+        gc.collect()
+
     def health(self) -> dict:
         """Diagnostics for /health endpoint."""
         return {

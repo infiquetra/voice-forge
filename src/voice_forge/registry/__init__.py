@@ -68,9 +68,13 @@ def _load_voice(voice_dir: Path) -> VoiceRef:
         raise FileNotFoundError(f"missing metadata.json in {voice_dir}")
     meta = json.loads(meta_path.read_text())
     voice_id = meta.get("voice_id", voice_dir.name)
-    # F5 is the default per DECISIONS 2026-05-25; legacy metadata.json
-    # files without an explicit backend field route here.
-    backend = meta.get("backend", "f5")
+    # Default per DECISIONS 2026-05-25 was F5; the runtime-configured
+    # default (via PUT /v1/backends/default → ~/.voice-forge/config.json)
+    # overrides it. Legacy metadata.json files without an explicit backend
+    # field route to the configured default.
+    from voice_forge.config import get_default_backend
+
+    backend = meta.get("backend", get_default_backend())
     ref_wav = voice_dir / "ref.wav"
     ref_txt = voice_dir / "ref.txt"
     ref_text = ref_txt.read_text().strip() if ref_txt.exists() else None

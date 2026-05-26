@@ -27,5 +27,8 @@ class FakeDispatchBackend:
     def health(self) -> dict:
         return {"name": self.name}
 
+    def unload(self) -> None:
+        return None
+
 
 register_backend("fake_dispatch", FakeDispatchBackend)

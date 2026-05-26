@@ -35,10 +35,26 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import __version__, metrics
+from . import __version__, config, metrics
 from .backends import available_backends, get_backend, known_backends, load_backend_module
 from .registry import Registry
 from .sentence_buffer import SentenceBuffer
+
+try:
+    import psutil
+
+    _PROCESS = psutil.Process()
+except ImportError:  # pragma: no cover — psutil is a base dep, this is belt-and-suspenders
+    psutil = None  # type: ignore[assignment]
+    _PROCESS = None
+
+
+def _process_rss_mb() -> float | None:
+    """Current process RSS in MB, or None if psutil isn't available."""
+    if _PROCESS is None:
+        return None
+    return _PROCESS.memory_info().rss / (1024 * 1024)
+
 
 logger = logging.getLogger("voice_forge")
 logging.basicConfig(level=os.environ.get("VOICE_FORGE_LOG_LEVEL", "INFO").upper())
@@ -133,10 +149,10 @@ class FromElevenLabsRequest(BaseModel):
     voice_id: str
     elevenlabs_voice_id: str
     elevenlabs_api_key: str | None = None
-    # F5 is the default per DECISIONS 2026-05-25 — only identity-preserving
-    # backend that holds coherence past 30 s. Override per-call for NeuTTS
-    # or others.
-    backend: str = "f5"
+    # The default flows from ``config.get_default_backend()`` so a runtime
+    # PUT /v1/backends/default change is honored without restarting the
+    # server. F5 is the hardcoded fallback (DECISIONS 2026-05-25).
+    backend: str = Field(default_factory=config.get_default_backend)
     max_seconds: float = 14.0
     auto_trim: bool = True
     language: str = "en"
@@ -346,6 +362,8 @@ class BackendInfo(BaseModel):
     name: str
     known: bool
     installed: bool
+    loaded: bool
+    is_default: bool
     tunables: dict
 
 
@@ -353,19 +371,41 @@ class BackendsList(BaseModel):
     data: list[BackendInfo]
 
 
+class BackendDefaultRequest(BaseModel):
+    backend: str = Field(..., description="Backend name to make the new default")
+
+
+class BackendDefaultResponse(BaseModel):
+    default_backend: str
+
+
+class BackendLifecycleResponse(BaseModel):
+    """Returned by load / unload / DELETE-loaded endpoints.
+
+    The RSS deltas are real measurements via psutil — see the partial-unload
+    note in TTSBackend.unload() about realistic recovery being ~70-90% of a
+    backend's resident set. The 30-10% residual is PyTorch / MPS / HF cache
+    state that doesn't release without a process restart.
+    """
+
+    backend: str | None = None  # None for the bulk DELETE-loaded variant
+    action: str  # "loaded" | "already_loaded" | "unloaded" | "already_unloaded" | "reset"
+    affected_backends: list[str] = Field(default_factory=list)
+    rss_before_mb: float | None = None
+    rss_after_mb: float | None = None
+    reclaimed_mb: float | None = None  # signed: positive on unload, ≤0 on load
+    note: str | None = None
+
+
 @app.get("/v1/backends", response_model=BackendsList)
 async def list_backends() -> BackendsList:
-    """List backends voice-forge knows about + each one's per-voice tunable schema.
+    """List backends + tunable schemas + runtime load state.
 
-    Used by the demo page to render a conditional knob panel: pick a model,
-    see only the sampling knobs that backend honors. Backends listed but
-    flagged ``installed=false`` are known to the registry but their extras
-    aren't installed in this environment (e.g. you'd need ``[chatterbox]``).
-
-    Attempts to import each known backend module to surface its
-    ``KNOWN_TUNABLES`` even before any voice has triggered a load —
-    failure to import (missing extras) is recorded as ``installed=false``.
+    ``installed`` — backend extra is on this host (pip install voice-forge-tts[name]).
+    ``loaded``    — backend instance currently in memory (consuming RSS).
+    ``is_default``— this backend is the configured default for new voices.
     """
+    current_default = config.get_default_backend()
     out: list[BackendInfo] = []
     for backend_name in known_backends():
         tunables: dict = {}
@@ -376,18 +416,152 @@ async def list_backends() -> BackendsList:
             tunables = getattr(cls, "KNOWN_TUNABLES", {}) or {}
             is_installed = True
         except (ImportError, KeyError):
-            # Backend known by name but extra not installed in this env
-            # (e.g. chatterbox without the [chatterbox] pip extra).
             is_installed = False
         out.append(
             BackendInfo(
                 name=backend_name,
                 known=True,
                 installed=is_installed,
+                loaded=backend_name in _BACKENDS,
+                is_default=(backend_name == current_default),
                 tunables=tunables,
             )
         )
     return BackendsList(data=out)
+
+
+@app.post("/v1/backends/{name}/load", response_model=BackendLifecycleResponse)
+async def load_backend_endpoint(name: str) -> BackendLifecycleResponse:
+    """Explicitly warm a backend without needing a synth call.
+
+    Useful at boot time to amortize cold-load latency before the first
+    request. Idempotent — re-loading an already-loaded backend is a no-op
+    that returns ``action="already_loaded"``.
+    """
+    if name not in known_backends():
+        raise HTTPException(
+            status_code=404, detail=f"unknown backend {name!r}; known: {known_backends()}"
+        )
+    if name in _BACKENDS:
+        return BackendLifecycleResponse(
+            backend=name,
+            action="already_loaded",
+            affected_backends=[name],
+            rss_before_mb=_process_rss_mb(),
+            rss_after_mb=_process_rss_mb(),
+            reclaimed_mb=0.0,
+        )
+    rss_before = _process_rss_mb()
+    try:
+        _ensure_backend(name)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"load failed: {exc!r}") from exc
+    rss_after = _process_rss_mb()
+    return BackendLifecycleResponse(
+        backend=name,
+        action="loaded",
+        affected_backends=[name],
+        rss_before_mb=rss_before,
+        rss_after_mb=rss_after,
+        reclaimed_mb=(
+            (rss_before - rss_after) if rss_before is not None and rss_after is not None else None
+        ),
+    )
+
+
+@app.post("/v1/backends/{name}/unload", response_model=BackendLifecycleResponse)
+async def unload_backend_endpoint(name: str) -> BackendLifecycleResponse:
+    """Release a backend's model state. Reports actual RSS reclaimed.
+
+    Realistic recovery is ~70-90% — framework caches (PyTorch MPS allocator,
+    HuggingFace cache pages, shared libraries) persist until process restart.
+    For full reclamation, restart ``voice-forge serve`` (~3 s boot).
+    """
+    if name not in known_backends():
+        raise HTTPException(
+            status_code=404, detail=f"unknown backend {name!r}; known: {known_backends()}"
+        )
+    if name not in _BACKENDS:
+        return BackendLifecycleResponse(
+            backend=name,
+            action="already_unloaded",
+            affected_backends=[],
+            rss_before_mb=_process_rss_mb(),
+            rss_after_mb=_process_rss_mb(),
+            reclaimed_mb=0.0,
+        )
+    rss_before = _process_rss_mb()
+    backend = _BACKENDS.pop(name)
+    try:
+        backend.unload()  # type: ignore[attr-defined]
+    except Exception as exc:
+        # Backend instance is already out of _BACKENDS; just log + continue
+        logger.warning("[%s] unload() raised: %r", name, exc)
+    metrics.backend_loaded.labels(backend=name).set(0)
+    rss_after = _process_rss_mb()
+    reclaimed = (
+        (rss_before - rss_after) if rss_before is not None and rss_after is not None else None
+    )
+    note = None
+    if reclaimed is not None and rss_before:
+        # If less than 50% of the backend's RSS came back, surface that to the
+        # caller — they may want to restart the process for full reclamation.
+        # Estimates ASSUME the backend was the biggest RSS contributor.
+        pass  # Could compute against backend-specific expected RSS; skip for now.
+    return BackendLifecycleResponse(
+        backend=name,
+        action="unloaded",
+        affected_backends=[name],
+        rss_before_mb=rss_before,
+        rss_after_mb=rss_after,
+        reclaimed_mb=reclaimed,
+        note=note,
+    )
+
+
+@app.delete("/v1/backends/loaded", response_model=BackendLifecycleResponse)
+async def unload_all_backends() -> BackendLifecycleResponse:
+    """Unload every currently-loaded backend. Idempotent (no-op if nothing loaded)."""
+    loaded_names = list(_BACKENDS.keys())
+    rss_before = _process_rss_mb()
+    for name in loaded_names:
+        backend = _BACKENDS.pop(name)
+        try:
+            backend.unload()  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.warning("[%s] unload() raised: %r", name, exc)
+        metrics.backend_loaded.labels(backend=name).set(0)
+    rss_after = _process_rss_mb()
+    return BackendLifecycleResponse(
+        backend=None,
+        action="reset",
+        affected_backends=loaded_names,
+        rss_before_mb=rss_before,
+        rss_after_mb=rss_after,
+        reclaimed_mb=(
+            (rss_before - rss_after) if rss_before is not None and rss_after is not None else None
+        ),
+    )
+
+
+@app.put("/v1/backends/default", response_model=BackendDefaultResponse)
+async def set_default_backend_endpoint(req: BackendDefaultRequest) -> BackendDefaultResponse:
+    """Set the system-wide default backend.
+
+    Persisted to ``~/.voice-forge/config.json`` so the change survives
+    process restart. Affects new voice registrations + the
+    ``backend=`` defaults on the REST + CLI surfaces. Does NOT
+    re-route already-registered voices.
+    """
+    if req.backend not in known_backends():
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown backend {req.backend!r}; known: {known_backends()}",
+        )
+    new_value = config.set_default_backend(req.backend)
+    return BackendDefaultResponse(default_backend=new_value)
 
 
 @app.get("/v1/audio/voices", response_model=VoicesList)
@@ -432,7 +606,10 @@ async def register_voice(
     voice_id: str,
     ref_audio: UploadFile = File(...),  # noqa: B008,
     ref_text: str | None = Form(default=None),
-    backend: str = Form(default="f5"),
+    # backend defaults to the runtime-configured value (config.get_default_backend)
+    # — Form's default= is evaluated at route definition, not per-request, so we
+    # use None as the sentinel and resolve inside the body.
+    backend: str | None = Form(default=None),
     language: str = Form(default="en"),
     description: str = Form(default=""),
     overwrite: bool = Form(default=False),
@@ -448,6 +625,12 @@ async def register_voice(
         tmp_f.write(await ref_audio.read())
 
     try:
+        # Resolve the runtime-configured default (was a Form default before,
+        # but FastAPI evaluates Form(default=...) once at route registration;
+        # we want it re-resolved per-request so PUT /v1/backends/default takes
+        # effect without a restart).
+        backend_resolved = backend or config.get_default_backend()
+
         # Whisper-transcribe if no ref_text provided. Whisper is sync +
         # CPU-bound, so push it off the event loop.
         if ref_text is None:
@@ -464,7 +647,7 @@ async def register_voice(
                 voice_id=voice_id,
                 ref_audio_path=tmp_path,
                 ref_text=ref_text,
-                backend=backend,
+                backend=backend_resolved,
                 metadata={"language": language, "description": description},
                 overwrite=overwrite,
             )
