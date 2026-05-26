@@ -152,9 +152,9 @@ def cmd_audition(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     picker = pick_auto if args.auto else pick_interactive
 
-    api_key = os.environ.get("ELEVENLABS_API_KEY")
-    if not api_key:
-        sys.exit("ELEVENLABS_API_KEY env var required for audition")
+    # api_key=None triggers _resolve_api_key's full chain: env var → vault.
+    # We pass through so audition + regen both honor the vault.
+    api_key = None
 
     results: list[tuple[str, str | None]] = []
     for spec in personas:
@@ -199,9 +199,8 @@ def _pcm24k_to_wav(pcm_bytes: bytes, out_path: Path, sample_rate: int = 24000) -
 def cmd_regen(args: argparse.Namespace) -> int:
     fleet = load_fleet(Path(args.fleet))
     personas = _select_personas(fleet, args)
-    api_key = os.environ.get("ELEVENLABS_API_KEY")
-    if not api_key:
-        sys.exit("ELEVENLABS_API_KEY env var required for regen")
+    # api_key=None triggers _resolve_api_key's full chain: env var → vault.
+    api_key = None
 
     for spec in personas:
         if not spec.elevenlabs_voice_id:

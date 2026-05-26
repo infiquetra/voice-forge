@@ -63,14 +63,31 @@ class Preview:
 
 
 def _resolve_api_key(api_key: str | None) -> str:
+    """Resolution chain: explicit kwarg → env var → vault.
+
+    The vault is consulted via :func:`voice_forge.secrets.get_secret` which
+    handles its own missing-file / missing-password tolerance, so it's
+    safe to call even on hosts without a vault configured. The import is
+    deferred so the secrets module's ``cryptography`` dependency isn't
+    a hard requirement for env-var-only users.
+    """
     if api_key:
         return api_key
     env = os.environ.get("ELEVENLABS_API_KEY")
-    if not env:
-        raise RuntimeError(
-            "ElevenLabs API key required: pass api_key=... or set ELEVENLABS_API_KEY env var"
-        )
-    return env
+    if env:
+        return env
+    try:
+        from voice_forge.secrets import get_secret  # noqa: PLC0415 — defer import
+
+        vault_val = get_secret("elevenlabs.api_key")
+        if vault_val:
+            return vault_val
+    except ImportError:
+        pass
+    raise RuntimeError(
+        "ElevenLabs API key required: pass api_key=..., set ELEVENLABS_API_KEY env var, "
+        "or `voice-forge-secrets set elevenlabs.api_key <key>`"
+    )
 
 
 def _http(

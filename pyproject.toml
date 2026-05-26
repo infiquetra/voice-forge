@@ -34,6 +34,7 @@ dependencies = [
     "python-multipart>=0.0.9",  # FastAPI File/Form deps
     "prometheus-client>=0.20",  # /metrics endpoint
     "psutil>=5.9",              # RSS measurement for backend load/unload reporting
+    "cryptography>=42",         # voice_forge.secrets — Ansible Vault 1.1 codec
 ]
 
 [project.optional-dependencies]
@@ -127,6 +128,7 @@ dev = [
 [project.scripts]
 voice-forge = "voice_forge.cli:main"
 voice-forge-backend-shim = "voice_forge.subprocess_shim:main"
+voice-forge-secrets = "voice_forge.secrets.cli:main"
 
 [tool.hatch.metadata]
 # Needed because the [melotts] extra references a git+https URL (PyPI sdist

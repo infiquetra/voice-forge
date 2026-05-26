@@ -217,3 +217,14 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .audition-registry/
+
+# voice-forge encrypted credential store. The file itself is encrypted
+# (AES-256-CTR + HMAC-SHA256 via Ansible Vault 1.1 format) so it's safe
+# to commit if you trust your vault password, but the default posture is
+# don't-commit-by-accident. Remove these lines if you want to sync the
+# vault across machines via git. See src/voice_forge/secrets/README.md.
+#
+# Leading slash anchors to repo root — otherwise the pattern would also
+# match src/voice_forge/secrets/ (the *module*, which we DO want tracked).
+/secrets/
+.voice-forge/

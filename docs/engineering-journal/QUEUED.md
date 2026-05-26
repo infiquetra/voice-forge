@@ -410,3 +410,37 @@ See [LEARNINGS 2026-05-24 § Kokoro voice-mixing tensor blending](../engineering
 **Worth it when.** A specific voice needs different temperature / top_k / repeat_penalty than the backend default.
 
 **Context.** Store overrides in `metadata.json` under a `sampling` key. Backend reads + applies before each synth call.
+
+---
+
+## P1 — The Forge: full web-UI redesign (rename /lab → /forge)
+
+**Priority.** P1 — `/lab` got us to a working voice-tuning + audition surface, but it's an accumulation of patches, not a design. Every workflow we run currently (Voice Design → audition → ref-clip capture → backend registration → tuning → scorecard → handoff to production) lives across CLI, file edits, and the lab page in fragmented ways. Worth doing right once we have a couple more weeks of usage data.
+
+**Effort.** Day-1 design + 2-3 days build + 1 day polish. UI-shaped work — best done after the v0.3 audition + persona workflow stabilizes so we know what to design FOR.
+
+**Worth it when.**
+- Voice Design audition becomes a routine workflow (Mimir lands, future personas, refresh cycles)
+- We have 2+ users (not just the maintainer) and the duplicated-section / output-log-buried-at-bottom UX bites
+- The secrets module ships (this lets the Forge handle credential config UI)
+
+**Brainstorm — six pillars for the redesign:**
+
+1. **Rename.** `/lab` → `/forge`. "Lab" reads like a sandbox; "forge" reads like the place voices get made. Service name stays voice-forge; the web surface adopts the name. Endpoint at `/forge` (alias `/lab` for back-compat one release).
+
+2. **UX recomposition, not just restyling.** Current page is well-built per-section but the sections are stacked with no consideration for the **actual user flow**. Specific failure: clicking a voice speak button means the audio + timing output should be **visible without scrolling**, but the output log sits at the bottom of a 700-line scroll. Output-log + speak-controls should share a viewport. Likely needs a 2-column or tabbed layout, not the current accordion-down-the-page model.
+
+3. **Configuration panel for secrets + LLM credentials.** Now that voice_forge.secrets ships (vault-encrypted credential store), the Forge needs a UI to manage entries — add/edit/show-with-mask/rotate. Same panel handles: ElevenLabs API key (for Voice Design + regen), OpenAI / Anthropic keys (for LLM-assisted prompt generation, see #4), service-side bearer tokens (deferred from v0.3 but landing eventually). One settings tab, structured form, never echoes raw values to DOM.
+
+4. **External-LLM-via-API path for prompt generation, not embedded LLM.** Even with OAuth/API-key config in the Forge, **the Forge itself should not be an LLM client**. Instead: define a thin contract (`POST /v1/prompts/voice-design` body: `{persona: "mimir-engineer", soul_md: "...", existing_spec: {...}}`) that the Forge can call against any external tool that speaks it — Claude Code via redis-bridge, Codex via stdin, Anthropic API directly, etc. The Forge sends context, gets back a structured Voice Design spec proposal, displays diff vs current, user accepts. This keeps the Forge dependency-light and lets people use whatever LLM tool they already have configured.
+
+5. **Dedicated audition workflow tab.** The current "lab" mashes together: persona × backend coverage matrix, knob tuning, scorecard editing, preset browser, reference playback. The audition lifecycle deserves its own first-class section: (a) draft a new persona's Voice Design spec (with optional LLM-assist from #4), (b) run audition → preview 3 → pick → persist, (c) regen ref WAV from the new voice_id, (d) auto-register into voice-forge backends, (e) test clone via every applicable backend, (f) refine the spec if results are bad, (g) plug into production. The full Voice Design → cloning → production path lives in one tab.
+
+6. **"Scan the workflows we actually execute" as the design step.** Don't redesign from scratch. Concretely: enumerate every shell command, every CLI invocation, every web-form click, every text edit we've made in the last 2 weeks to get Asgard configured. That list IS the workflow surface the Forge needs to support. Then group, prioritize, sequence. The current `/lab` was designed before we knew what the workflows looked like; the v2 should be designed after.
+
+**Out of scope for this entry, but adjacent:**
+- Streaming-quality A/B comparison UI (already partially in `/lab`)
+- Per-voice metrics dashboards (folds into the "test clone via every backend" step above; needs `/metrics` data piped through)
+- Multi-tenant Forge (separate concern; not v0.3)
+
+**Refs.** Current page at `src/voice_forge/static/lab.html` (~770 LOC vanilla JS, becoming hard to extend). The user's stated frustrations 2026-05-26 — output log placement, no consideration of usability between sections. The completed `/v1/backends`, `/v1/scorecard`, `/v1/personas/prompts`, `/v1/voices/{id}/reference`, `/v1/presets/<backend>/sample`, `/v1/tts/stream` endpoints are good — UI redesign doesn't need new server work, just better composition.
