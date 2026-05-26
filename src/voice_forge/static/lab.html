@@ -420,22 +420,30 @@
         const btn = el("button", { className: "tiny secondary", text: "▼ " + tunablesCount });
         btn.title = "Toggle knob panel";
         btn.addEventListener("click", () => {
-          const existing = tr.dataset.knobPanelId
-            ? document.getElementById(tr.dataset.knobPanelId) : null;
-          if (existing && existing.parentNode) {
-            existing.parentNode.removeChild(existing.parentNode);  // wrapper TR
+          // The wrapper TR (not the panel itself) is what we need to remove.
+          // We tag the wrapper TR with a known id; on toggle we find + drop it.
+          const wrapperId = tr.dataset.knobWrapperId;
+          if (wrapperId) {
+            const wrapper = document.getElementById(wrapperId);
+            if (wrapper && wrapper.parentNode) {
+              wrapper.parentNode.removeChild(wrapper);
+            }
+            tr.dataset.knobWrapperId = "";
             tr.dataset.knobPanelId = "";
             btn.textContent = "▼ " + tunablesCount;
             return;
           }
           const panel = renderKnobPanel(voice, backend);
-          const panelId = "knob-panel-" + persona + "-" + backend + "-" + Date.now();
+          const baseId = persona + "-" + backend + "-" + Date.now();
+          const panelId = "knob-panel-" + baseId;
+          const wrapperRowId = "knob-wrapper-" + baseId;
           panel.id = panelId;
           const td = el("td", null, [panel]);
           td.colSpan = 6;
-          const newTr = el("tr", null, [td]);
+          const newTr = el("tr", { id: wrapperRowId }, [td]);
           tr.parentNode.insertBefore(newTr, tr.nextSibling);
           tr.dataset.knobPanelId = panelId;
+          tr.dataset.knobWrapperId = wrapperRowId;
           btn.textContent = "▲ " + tunablesCount;
         });
         knobCell.appendChild(btn);

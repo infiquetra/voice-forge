@@ -33,6 +33,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RESPONSES = REPO_ROOT / "tests" / "functional" / "responses.yaml"
+DEFAULT_FLEET = REPO_ROOT / "tests" / "functional" / "fleet.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / "tests" / "functional" / "persona_prompts.json"
 SHORT_TEXT = "Can you hear me?"
 
@@ -40,6 +41,12 @@ SHORT_TEXT = "Can you hear me?"
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--responses", type=Path, default=DEFAULT_RESPONSES)
+    parser.add_argument(
+        "--fleet",
+        type=Path,
+        default=DEFAULT_FLEET,
+        help="Used to map responses.yaml lowercase IDs (saga) to display names (Saga).",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
         "--overwrite",
@@ -51,6 +58,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.responses.is_file():
         print(f"error: responses file missing at {args.responses}", file=sys.stderr)
         return 1
+    if not args.fleet.is_file():
+        print(f"error: fleet file missing at {args.fleet}", file=sys.stderr)
+        return 1
 
     responses = yaml.safe_load(args.responses.read_text())
     if not isinstance(responses, dict):
@@ -59,6 +69,16 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Build id → display_name map from fleet.yaml so the persona_prompts.json
+    # keys match the voice metadata's `persona` field (display-case). Without
+    # this, /lab's lookup `personaPrompts[voice.persona]` returns undefined.
+    fleet = yaml.safe_load(args.fleet.read_text())
+    id_to_display: dict[str, str] = {}
+    if isinstance(fleet, list):
+        for entry in fleet:
+            if isinstance(entry, dict) and entry.get("id") and entry.get("display_name"):
+                id_to_display[entry["id"]] = entry["display_name"]
 
     existing: dict[str, dict] = {}
     if args.output.is_file():
@@ -75,10 +95,13 @@ def main(argv: list[str] | None = None) -> int:
     for persona_id, persona_data in responses.items():
         if not isinstance(persona_data, dict):
             continue
-        if persona_id in existing and not args.overwrite:
+        # Use display_name as the key (matches voice metadata's `persona` field).
+        # Fall back to the raw id if fleet.yaml doesn't have a display_name for it.
+        key = id_to_display.get(persona_id, persona_id)
+        if key in existing and not args.overwrite:
             skipped += 1
             continue
-        existing[persona_id] = {
+        existing[key] = {
             "short": SHORT_TEXT,
             "medium": persona_data.get("p2", "") or "",
             "long": persona_data.get("p3", "") or "",
