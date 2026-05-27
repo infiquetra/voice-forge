@@ -53,8 +53,12 @@ from .audition import (
 from .elevenlabs import (
     ElevenLabsError,
     Preview,
+    SharedVoice,
+    add_shared_voice_to_library,
     create_voice_from_preview,
     create_voice_previews,
+    download_preview,
+    search_shared_voices,
     text_to_speech,
 )
 from .fleet import Fleet, PersonaSpec, load_fleet
@@ -71,7 +75,10 @@ __all__ = [
     "Fleet",
     "PersonaSpec",
     "Preview",
+    "SharedVoice",
+    "add_shared_voice_to_library",
     "audition_persona",
+    "download_preview",
     "build_voice_design_prompt",
     "generate_previews_only",
     "persist_preview",
@@ -80,6 +87,7 @@ __all__ = [
     "load_fleet",
     "pick_auto",
     "pick_interactive",
+    "search_shared_voices",
     "text_to_speech",
     "trim_for_design_prompt",
 ]

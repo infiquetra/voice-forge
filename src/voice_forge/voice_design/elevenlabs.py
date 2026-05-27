@@ -29,6 +29,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib import error, request
 
@@ -185,6 +186,139 @@ def create_voice_from_preview(
     return voice_id
 
 
+@dataclass(frozen=True)
+class SharedVoice:
+    """One voice from the public Voice Library (``/v1/shared-voices``).
+
+    ``voice_id`` + ``public_owner_id`` together identify the voice for the
+    add-to-library call. ``preview_url`` is a static MP3 we can fetch
+    directly (no API key needed) to let the user audition before adopting.
+
+    Note on accent labels: ElevenLabs's library taxonomy lumps Norwegian /
+    Swedish / Danish / Icelandic into a small set of values, usually
+    ``swedish`` or ``nordic``. The free-text ``description`` is more
+    accurate. Don't trust ``accent`` to disambiguate Scandinavian sub-
+    accents — read ``description`` too.
+    """
+
+    voice_id: str
+    public_owner_id: str
+    name: str
+    description: str
+    gender: str
+    age: str
+    accent: str
+    language: str
+    locale: str
+    preview_url: str
+    category: str
+    descriptive: str
+    use_case: str
+    cloned_by_count: int
+
+
+def search_shared_voices(
+    *,
+    api_key: str | None = None,
+    language: str = "en",
+    gender: str | None = None,
+    accent: str | None = None,
+    age: str | None = None,
+    search: str | None = None,
+    page_size: int = 20,
+) -> list[SharedVoice]:
+    """Query the public Voice Library. Returns voices matching the filters.
+
+    None-valued filters are omitted (the server treats absence as 'any').
+    ``search`` is a free-text query that ElevenLabs runs against name +
+    description + tags.
+    """
+    api_key = _resolve_api_key(api_key)
+    from urllib.parse import urlencode  # noqa: PLC0415 — local stdlib only
+
+    params: dict[str, str] = {"language": language, "page_size": str(page_size)}
+    if gender:
+        params["gender"] = gender
+    if accent:
+        params["accent"] = accent
+    if age:
+        params["age"] = age
+    if search:
+        params["search"] = search
+    raw = _http(
+        "GET",
+        f"/v1/shared-voices?{urlencode(params)}",
+        api_key,
+    )
+    payload = json.loads(raw.decode())
+    out: list[SharedVoice] = []
+    for v in payload.get("voices") or []:
+        out.append(
+            SharedVoice(
+                voice_id=v.get("voice_id", ""),
+                public_owner_id=v.get("public_owner_id", ""),
+                name=v.get("name", ""),
+                description=v.get("description", ""),
+                gender=v.get("gender", ""),
+                age=v.get("age", ""),
+                accent=v.get("accent", ""),
+                language=v.get("language", ""),
+                locale=v.get("locale", ""),
+                preview_url=v.get("preview_url", ""),
+                category=v.get("category", ""),
+                descriptive=v.get("descriptive", ""),
+                use_case=v.get("use_case", ""),
+                cloned_by_count=int(v.get("cloned_by_count") or 0),
+            )
+        )
+    return out
+
+
+def download_preview(voice: SharedVoice, out_path: Path) -> Path:
+    """Fetch a shared voice's preview MP3 to ``out_path``.
+
+    The preview URLs are public Google Cloud Storage links; no API key
+    needed. We use urllib so this module stays dependency-light.
+    """
+    from urllib.request import Request, urlopen  # noqa: PLC0415
+
+    req = Request(voice.preview_url, headers={"User-Agent": "voice-forge"})
+    with urlopen(req, timeout=30) as resp:  # noqa: S310 — URL is from ElevenLabs API
+        data = resp.read()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(data)
+    return out_path
+
+
+def add_shared_voice_to_library(
+    public_owner_id: str,
+    voice_id: str,
+    new_name: str,
+    *,
+    api_key: str | None = None,
+) -> str:
+    """Adopt a public shared voice into the caller's private library.
+
+    Returns the NEW private ``voice_id`` (different from the public one).
+    Drop this into ``fleet.yaml`` under ``elevenlabs_voice_id`` to use
+    the voice in voice-forge's regen + cloning pipeline.
+    """
+    api_key = _resolve_api_key(api_key)
+    raw = _http(
+        "POST",
+        f"/v1/voices/add/{public_owner_id}/{voice_id}",
+        api_key,
+        body={"new_name": new_name},
+    )
+    payload = json.loads(raw.decode())
+    new_voice_id = payload.get("voice_id")
+    if not new_voice_id:
+        raise ElevenLabsError(
+            "POST", f"/v1/voices/add/{public_owner_id}/{voice_id}", 200, str(payload)
+        )
+    return new_voice_id
+
+
 def text_to_speech(
     voice_id: str,
     text: str,
@@ -200,18 +334,27 @@ def text_to_speech(
     24 kHz mono — the format voice-forge's F5/NeuTTS reference encoders
     expect. Use ``mp3_44100_128`` for general playback. The endpoint
     returns the audio body directly (no JSON wrapper).
+
+    Bug fix 2026-05-26: ``output_format`` is a QUERY parameter, not a
+    body field. Earlier versions of this function passed it in the body,
+    which ElevenLabs silently ignored — the API fell back to the default
+    ``mp3_44100_128`` regardless of what the caller requested. Code that
+    treated the result as PCM (e.g. wrapping in a 24kHz int16 WAV
+    header) produced pure noise. Now correctly emitted in the query string.
     """
     api_key = _resolve_api_key(api_key)
     body: dict[str, Any] = {
         "text": text,
         "model_id": model_id,
-        "output_format": output_format,
     }
     if voice_settings:
         body["voice_settings"] = voice_settings
+    from urllib.parse import urlencode  # noqa: PLC0415 — local stdlib only
+
+    qs = urlencode({"output_format": output_format})
     return _http(
         "POST",
-        f"/v1/text-to-speech/{voice_id}",
+        f"/v1/text-to-speech/{voice_id}?{qs}",
         api_key,
         body=body,
         accept="audio/*",

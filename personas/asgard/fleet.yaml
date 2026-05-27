@@ -254,19 +254,35 @@ personas:
   # judgment-bearing baritone.
   - voice_id: mimir-engineer
     display_name: Mimir
-    elevenlabs_voice_id: null
+    # Voice Design output (hand-tuned by user in ElevenLabs UI directly,
+    # 2026-05-26). The voice_engineering / persona blocks below are
+    # HISTORICAL — they document what voice-forge's Voice Design CLI
+    # tried to produce automatically (and failed for male-Nordic). The
+    # actual voice was designed in ElevenLabs's web UI with a richer
+    # character description ("Ancient Norse keeper of wisdom...") that
+    # the CLI's structured-spec format doesn't currently capture.
+    elevenlabs_voice_id: nJPI9HjoF1IPeYXUxF32
+    # ElevenLabs TTS-time voice settings, user-tuned in the ElevenLabs
+    # UI before exporting. These get passed through to /v1/text-to-speech
+    # when regenerating the ref.wav so the rendered clip matches what
+    # the user heard during design.
+    elevenlabs_voice_settings:
+      stability: 0.50
+      similarity_boost: 0.75
+      style: 0.15
+      use_speaker_boost: true
     voice_engineering:
       language: Native Norwegian speaker speaking English
       gender: male
       age: mid-50s to early 60s
       audio_quality: Perfect
-      accent: "Thick Norwegian accent (Bokmål-rooted — not Swedish, not Danish)"
-      pitch: Warm baritone, mid-low pitch
-      pace: Measured, deliberate pacing — pauses to think before speaking; weight in the silences
+      accent: "Heavy Norwegian accent (Bokmål-rooted, more pronounced than any modern speaker — the kind a wise elder from the older world would speak. Not Swedish, not Danish)"
+      pitch: Warm baritone with measured gravitas
+      pace: Slower pace; pauses thoughtfully
     persona:
-      role: Norse god of wisdom, keeper of Mímisbrunnr's well, counselor to Odin and the council's engineering steward
-      emotion: thoughtful, judicious, calm
-      style: Listens more than speaks. Asks the question whose answer changes the work. Direct without being abrasive. Will say "I do not know" rather than perform certainty.
+      role: Norse god of wisdom, keeper of Mímisbrunnr's well — Heid's male counterpart in the council
+      emotion: knowing, grounded, deliberate
+      style: Says "I do not know" without flinching.
     sample_text: |
       I've read through your plan. Two parts hold up well: the
       migration sequence and the rollback path. One part I'd ask

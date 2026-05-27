@@ -36,6 +36,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import wave
 from pathlib import Path
@@ -53,13 +54,16 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 from voice_forge.voice_design import (  # noqa: E402
     Fleet,
     PersonaSpec,
+    add_shared_voice_to_library,
     audition_persona,
     build_voice_design_prompt,
+    download_preview,
     generate_previews_only,
     load_fleet,
     persist_preview,
     pick_auto,
     pick_interactive,
+    search_shared_voices,
     text_to_speech,
 )
 
@@ -223,6 +227,127 @@ def cmd_persist(args: argparse.Namespace) -> int:
     return 0
 
 
+# ----- subcommand: library -----
+
+LIBRARY_DEFAULT_DIR = Path.home() / "voice-design-library-browse"
+
+
+def cmd_library(args: argparse.Namespace) -> int:
+    """Search the public ElevenLabs Voice Library + fetch preview MP3s.
+
+    Two modes:
+      * Default (no --add): query → table → download all previews to
+        ``<out_dir>/<query_slug>/``. User listens, then runs again with
+        ``--add --persona X --voice-id Y`` to adopt.
+      * ``--add``: POST /v1/voices/add to copy the chosen public voice
+        into the user's private library, then (if ``--persona`` is set)
+        write the new private voice_id back to fleet.yaml.
+
+    The ``accent`` taxonomy is small — Norwegian / Icelandic / Faroese
+    don't have their own values; everything Nordic-ish gets labeled
+    ``swedish`` or ``nordic``. The free-text ``description`` is more
+    accurate. Use ``--search`` for keyword matching instead of relying
+    on ``--accent`` alone.
+    """
+    api_key = None  # let resolution chain handle it
+
+    if args.add:
+        if not args.voice_id or not args.public_owner_id:
+            sys.exit(
+                "--add requires --voice-id AND --public-owner-id (both from `library` listing)"
+            )
+        new_name = args.name
+        if not new_name and args.persona:
+            fleet_path = Path(args.fleet).expanduser().resolve()
+            fleet = load_fleet(fleet_path)
+            spec = fleet.by_voice_id(args.persona)
+            new_name = spec.display_name
+        if not new_name:
+            sys.exit("--add needs --name <display> (or --persona + --fleet to derive it)")
+        new_id = add_shared_voice_to_library(
+            args.public_owner_id, args.voice_id, new_name, api_key=api_key
+        )
+        print(f"added to library: '{new_name}' → voice_id={new_id}")
+        if args.persona:
+            fleet_path = Path(args.fleet).expanduser().resolve()
+            if not args.dry_run_writeback:
+                _write_back_fleet(fleet_path, args.persona, new_id)
+        return 0
+
+    voices = search_shared_voices(
+        api_key=api_key,
+        language=args.language,
+        gender=args.gender,
+        accent=args.accent,
+        age=args.age,
+        search=args.search,
+        page_size=args.page_size,
+    )
+    print(f"\nfound {len(voices)} voices matching filters\n")
+    if not voices:
+        return 0
+
+    slug_parts = [args.language, args.gender or "any-gender", args.search or args.accent or "any"]
+    query_slug = "-".join(p for p in slug_parts if p).replace(" ", "_")
+    out_dir = Path(args.out_dir).expanduser().resolve() / query_slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Table header
+    print(f"  {'#':>2}  {'name':<40} {'age':<14} {'accent':<10} {'cloned':>6}  voice_id")
+    print("  " + "-" * 95)
+    for i, v in enumerate(voices, start=1):
+        line = (
+            f"  {i:>2}  {v.name[:39]:<40} {v.age:<14} {v.accent:<10} "
+            f"{v.cloned_by_count:>6}  {v.voice_id}"
+        )
+        print(line)
+
+    # Download previews + write a manifest sidecar so `add` knows the public_owner_id
+    print(f"\ndownloading previews → {out_dir}\n")
+    manifest_rows: list[dict] = []
+    for i, v in enumerate(voices, start=1):
+        # safe filename: "01_Per_Calm_and_Nordic.mp3"
+        safe_name = "".join(c if (c.isalnum() or c in "-_") else "_" for c in v.name)[:40]
+        mp3 = out_dir / f"{i:02d}_{safe_name}.mp3"
+        try:
+            download_preview(v, mp3)
+        except OSError as e:
+            print(f"  {i:>2}: failed to download preview: {e}")
+            continue
+        manifest_rows.append(
+            {
+                "index": i,
+                "name": v.name,
+                "voice_id": v.voice_id,
+                "public_owner_id": v.public_owner_id,
+                "accent": v.accent,
+                "age": v.age,
+                "description": v.description,
+                "mp3": mp3.name,
+            }
+        )
+        print(f"  {i:>2}: {mp3}")
+    manifest = {
+        "filters": {
+            "language": args.language,
+            "gender": args.gender,
+            "accent": args.accent,
+            "age": args.age,
+            "search": args.search,
+        },
+        "voices": manifest_rows,
+    }
+    (out_dir / "library_browse.json").write_text(json.dumps(manifest, indent=2))
+    print(f"\nmanifest: {out_dir / 'library_browse.json'}")
+    print(
+        "\nto adopt one into your library + wire into fleet.yaml:"
+        "\n  python scripts/voice_design.py library --add \\"
+        "\n     --persona <persona_id> --fleet personas/<fleet>/fleet.yaml \\"
+        "\n     --voice-id <voice_id_from_table> --public-owner-id <public_owner_id_from_manifest>"
+    )
+    return 0
+
+
 # ----- subcommand: regen -----
 
 
@@ -252,14 +377,24 @@ def cmd_regen(args: argparse.Namespace) -> int:
         if not text:
             print(f"[{spec.voice_id}] no sample_text in fleet and no --text given; skipping")
             continue
+        # ElevenLabs TTS-time voice_settings live under
+        # ``elevenlabs_voice_settings`` in fleet.yaml; load_fleet drops
+        # unrecognized keys into spec.extra so we pull from there. Passing
+        # the user's UI-tuned settings (stability, similarity_boost, style,
+        # use_speaker_boost) keeps the rendered ref.wav consistent with
+        # what they heard during ElevenLabs Voice Design.
+        voice_settings = spec.extra.get("elevenlabs_voice_settings")
+        settings_note = f" (settings={voice_settings})" if voice_settings else ""
         print(
-            f"\n[{spec.voice_id}] regen via voice_id={spec.elevenlabs_voice_id}, {len(text)} chars"
+            f"\n[{spec.voice_id}] regen via voice_id={spec.elevenlabs_voice_id}, "
+            f"{len(text)} chars{settings_note}"
         )
         pcm = text_to_speech(
             voice_id=spec.elevenlabs_voice_id,
             text=text,
             api_key=api_key,
             output_format="pcm_24000",
+            voice_settings=voice_settings,
         )
         target = spec.ref_audio
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -371,6 +506,75 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override sample_text — useful for shorter / different ref content",
     )
     p_regen.set_defaults(func=cmd_regen)
+
+    # ---- library ----
+    p_library = sub.add_parser(
+        "library",
+        help="Browse the ElevenLabs public Voice Library, or adopt a chosen voice",
+    )
+    p_library.add_argument(
+        "--out-dir",
+        default=str(LIBRARY_DEFAULT_DIR),
+        help=f"Where to download preview MP3s + manifest (default: {LIBRARY_DEFAULT_DIR})",
+    )
+    p_library.add_argument("--language", default="en", help="Voice language filter (default: en)")
+    p_library.add_argument(
+        "--gender",
+        choices=["male", "female", "neutral"],
+        help="Filter by voice gender",
+    )
+    p_library.add_argument(
+        "--accent",
+        help=(
+            "Filter by accent (small taxonomy — 'swedish' covers most Nordic; "
+            "use --search for finer queries)"
+        ),
+    )
+    p_library.add_argument(
+        "--age",
+        choices=["young", "middle_aged", "old"],
+        help="Filter by voice age",
+    )
+    p_library.add_argument("--search", help="Free-text search (name + description + tags)")
+    p_library.add_argument(
+        "--page-size", type=int, default=20, help="Max results per query (default: 20)"
+    )
+    p_library.add_argument(
+        "--add",
+        action="store_true",
+        help=(
+            "Adopt a previously-listed voice into your private library. Requires --voice-id and "
+            "--public-owner-id from a prior `library` run; also writes the new private voice_id "
+            "into fleet.yaml if --persona + --fleet are given."
+        ),
+    )
+    p_library.add_argument(
+        "--voice-id",
+        help="(with --add) Public voice_id to adopt — copy from a prior `library` listing",
+    )
+    p_library.add_argument(
+        "--public-owner-id",
+        help="(with --add) public_owner_id of the voice — from library_browse.json manifest",
+    )
+    p_library.add_argument(
+        "--name",
+        help=(
+            "(with --add) Name for the new voice in your library; "
+            "defaults to persona display_name"
+        ),
+    )
+    p_library.add_argument(
+        "--persona", help="(with --add) Persona voice_id in fleet.yaml to wire the new voice into"
+    )
+    p_library.add_argument(
+        "--fleet", help="(with --add + --persona) Path to fleet.yaml for write-back"
+    )
+    p_library.add_argument(
+        "--dry-run-writeback",
+        action="store_true",
+        help="(with --add) Adopt the voice but do NOT write voice_id back to fleet.yaml",
+    )
+    p_library.set_defaults(func=cmd_library)
 
     return p
 
