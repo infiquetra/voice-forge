@@ -131,6 +131,56 @@ Streaming: model.generate() runs in a worker thread; an AsyncStreamer-style queu
 
 ---
 
+### higgs-mlx silence-collapse on distribution-edge voices — bimodal, ~50% rate on Mimir, reproduced
+
+**Context.** higgs-mlx integration completed; agent reported ~50% silence-collapse rate on Mimir's reference at both q6 and q8 quantizations, with bundled `en_woman` always succeeding. User reasonably questioned the claim since the sample they heard sounded fine. Ran an independent 10-call verification sweep before trusting the rate.
+
+**Evidence.** 10 consecutive cold calls of higgs-mlx with Mimir's reference + same target text + fresh random seed each call (`/Users/jefcox/.claude/jobs/1d06b8bd/higgs_mlx_silence_check.py`):
+
+```
+ok:      5/10  (50%)
+silence: 5/10  (50%)
+per-call peak / RMS:
+  call 1: peak 0.0801  RMS 0.00056   silence
+  call 2: peak 0.6025  RMS 0.03982   ok
+  call 3: peak 0.7707  RMS 0.06095   ok
+  call 4: peak 0.4748  RMS 0.03071   ok
+  call 5: peak 0.0825  RMS 0.00054   silence
+  call 6: peak 0.0687  RMS 0.00052   silence
+  call 7: peak 0.7053  RMS 0.05886   ok
+  call 8: peak 0.0616  RMS 0.00051   silence
+  call 9: peak 0.0820  RMS 0.00052   silence
+  call 10: peak 0.7341 RMS 0.05638   ok
+```
+
+Outcomes are sharply bimodal:
+- Good: peak 0.47–0.77, RMS 0.03–0.06 (normal speech levels)
+- Silence: peak 0.06–0.08, RMS 0.0005 (sub-noise-floor; perceptually inaudible)
+
+No intermediate-amplitude outputs in 10 calls.
+
+**Mechanism.** A known TTS LM failure mode: the autoregressive decoder picks an audio-token trajectory near the start of generation that decodes through SNAC (or the underlying neural codec) to ~0 amplitude. The trajectory is locally-coherent (the LM thinks it's generating valid speech tokens) but the codec interprets those tokens as silence frames. Once the model is on a silence trajectory it stays on one — there's no recovery mid-utterance.
+
+Why distribution-edge voices specifically: Mimir's reference is at the edge of the model's pretraining distribution (deep male baritone + heavy Nordic-English accent + low-frequency-dominated spectral profile). The audio token sequence corresponding to this voice is in a low-density region of the LM's distribution. Sampling from this region has higher variance — sometimes the next-token distribution gives valid speech, sometimes it gives the silence basin. The 50% rate is the model flipping a near-coin-toss between the two basins at each generation.
+
+The bundled `en_woman` voice is at the center of the pretraining distribution; its audio token sequence is in a high-density region where the next-token distribution is sharply peaked on valid speech. No coin-flip.
+
+Quantization makes this worse but isn't the cause — q6 and q8 both exhibit the failure at roughly the same rate. The full-precision transformers `higgs` backend does NOT exhibit this failure on the same reference. Speculation: full-precision keeps the next-token distribution sharper at the distribution edge, biasing strongly enough toward valid-speech tokens that the silence basin is unreachable.
+
+**Fix (queued).** Server-side retry-on-silence guard in `higgs_mlx.synthesize()`: if `np.max(np.abs(pcm)) < 0.05` after generation, re-call up to N times (default 3). Bounded cost (~8s per retry on a ~25s utterance at 0.33× RTF). Math: 50% per-call → 0.5³ = 12.5% per-utterance after 3 retries → ~6% after a conservative 4 retries. [QUEUED #61.]
+
+Until #61 ships, the transformers `higgs` backend remains the production path for the Asgard fleet. higgs-mlx is fine as default for mainstream-distribution voices.
+
+**What surprised.** Bimodality — I expected a distribution of amplitudes with some near-zero outliers (model occasionally undercommitting). Instead it's binary: full speech OR pure silence, with no in-between in 10 trials. The model isn't "weakly generating"; it's correctly generating one of two distinct trajectories. That makes the retry guard cleaner to implement (no calibration of "how silent is too silent") and makes the math more predictable.
+
+Also surprised that I almost shipped "trust the agent's claim" instead of verifying. The user pushed back on the 50% number ("Mimir sounded fine") and they were right to — what they HEARD was a "good" call I cherry-picked from the agent's saved test output. Without the verification sweep we'd have queued mitigations for a problem of unknown magnitude. Always reproduce a third-party measurement before adopting its conclusion.
+
+**Generalizable rule.** When integrating a quantized model whose deployment scenarios sit at the edge of the training distribution (rare voices, rare languages, rare prompts), measure failure mode rates explicitly before declaring production-ready. Aggregate metrics (warm RTF, peak amplitude on success) hide tail behavior. Run N≥10 calls and report the rate at which the output fails to meet quality criteria, not just the per-call best-case latency. The bimodal failure mode here would NOT have been caught by a single sample-and-listen audit.
+
+**Refs.** Commit `c8f4d90` (higgs-mlx backend). [QUEUED #61 retry-on-silence guard]. Verification script: `~/.claude/jobs/1d06b8bd/higgs_mlx_silence_check.py`.
+
+---
+
 ### mlx-community on HuggingFace is the free-port repository for Apple Silicon ML
 
 **Context.** Higgs perf investigation concluded "MLX port" was the necessary next step but estimated as 1-2 weeks of work. Before committing that, checked whether the community had already done it.
