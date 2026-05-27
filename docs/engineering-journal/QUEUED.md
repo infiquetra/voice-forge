@@ -304,6 +304,10 @@ Ideal end state: when you audition a sister and it sounds wrong, you tweak her m
 
 **Context.** Bandit B615 flags any `from_pretrained(model_name)` call without a `revision=` kwarg, because unpinned downloads silently follow whatever HEAD the model's repo points at. Currently suppressed inline (`# nosec B615`) on `dia.py:146-147`; F5 / XTTS / Kokoro / NeuTTS use the lib's internal HF download which doesn't trigger bandit at our `-ll` level but has the same risk shape. Right fix: each backend's `load()` accepts an optional `revision: str | None = "<known-good-commit-sha>"` config field; default to a pinned SHA, allow override for testing newer revisions. Validation: pin to current SHA + verify model loads identically.
 
+---
+
+## P3 — Investigate NeuTTS streaming content-loss (15-21% drop vs batch)
+
 **Priority.** P3 — blocks flipping streaming-default to true.
 
 **Effort.** ~2-4 hours.
@@ -444,3 +448,127 @@ See [LEARNINGS 2026-05-24 § Kokoro voice-mixing tensor blending](../engineering
 - Multi-tenant Forge (separate concern; not v0.3)
 
 **Refs.** Current page at `src/voice_forge/static/lab.html` (~770 LOC vanilla JS, becoming hard to extend). The user's stated frustrations 2026-05-26 — output log placement, no consideration of usability between sections. The completed `/v1/backends`, `/v1/scorecard`, `/v1/personas/prompts`, `/v1/voices/{id}/reference`, `/v1/presets/<backend>/sample`, `/v1/tts/stream` endpoints are good — UI redesign doesn't need new server work, just better composition.
+
+---
+
+## P2 — Document ElevenLabs 500-char description cap + update `prompt_builder` (#56)
+
+**Priority.** P2 — silent truncation today produces voices that are missing the back half of their phonetic spec without warning. Cheap, high-confidence fix.
+
+**Effort.** ~30 min. One constant change + one note in the module docstring + a sentence in `docs/voice-design-guide.md`.
+
+**Worth it when.** Now — before the next persona is auditioned through ElevenLabs Voice Design. The current 1000-char value in `prompt_builder.py:86` is wrong and any future design built against it gets silently truncated server-side at ~500 chars.
+
+**Context.** Discovered 2026-05-26 during Mimir tuning: ElevenLabs UI accepts up to 1000-char descriptions but persists ~500 chars to the saved voice. Mimir's stored description is exactly 496 chars — sitting at the cap. Voice-forge's `PROMPT_CHAR_LIMIT = 1000` (with `PROMPT_SAFETY_MARGIN`) produces prompts that are silently chopped server-side after the 500-char point. The user discovered this by ear: a description that scored well in interactive testing rendered audibly worse once saved.
+
+**Changes.**
+- `src/voice_forge/voice_design/prompt_builder.py:86` — `PROMPT_CHAR_LIMIT = 500` (was 1000). Keep `PROMPT_SAFETY_MARGIN = 20` → effective cap 480.
+- Module docstring rule §5 — replace "Prompt cap is ~1000 chars" with the truncation finding + safety margin reasoning.
+- `docs/voice-design-guide.md` — add the cap warning in the prompt-design section.
+
+**Refs.** [LEARNINGS § "ElevenLabs Voice Design pipeline quirks discovered through Mimir + Freya tuning"](LEARNINGS.md) item 3. Commit `0b51de3` (output_format bugfix + library client).
+
+---
+
+## P2 — Re-design Eir voice with explicit phonetic guidance (#58)
+
+**Priority.** P2 — Eir is the last Asgard holdout. Of the 4 voices that needed Higgs over F5, three (Mimir / Freya / Trjegul) now preserve accent through Higgs cloning; Eir does not. Phonetic-imperative description rebuild is the next lever.
+
+**Effort.** ~1 hour: rewrite description in the Freya-pattern phonetic-imperative form → 3-preview audition through ElevenLabs Voice Design → pick + persist → regen `personas/asgard/eir-wellness/ref.wav` → re-run Higgs synth → ear-test.
+
+**Worth it when.** Now — the rebuild pattern is hot. The phonetic-imperative form ("rolled R sounds, softened consonants, th drifts toward d") fixed Freya in one pass after the categorical-label form ("Heavy Norwegian accent") failed across multiple iterations. Eir's current description is categorical-label-shaped; rebuild it in imperative form.
+
+**Context.** Eir's failure mode (per LEARNINGS): the source ElevenLabs voice itself has weaker accent characteristics in the recorded audio than the other 4 voices. Fixing ref.txt audio/text mismatch (commit `7b3bef3`) did not bring accent back through Higgs — the dominant signal is the source recording, not ref_text quality. Logical next step: rebuild the source recording from a stronger description.
+
+**Changes.**
+- `personas/asgard/eir-wellness/voice_design.yaml` (or wherever the spec lives) — rewrite description to use phonetic imperatives. Reference Freya v2's description structure as the template.
+- Audition via `voice-forge-secrets`-backed ElevenLabs key + `scripts/voice_design.py audition eir-wellness --previews 3`.
+- Persist winning preview → `personas/asgard/eir-wellness/ref.wav` overwrite (back up first).
+- Re-run the 5-voice Higgs matrix (`~/.claude/jobs/.../higgs_final_matrix.py` pattern) including Eir; confirm accent preservation by ear.
+
+**Refs.** [LEARNINGS § "Phonetic-imperative voice descriptions beat categorical accent labels in ElevenLabs Voice Design"](LEARNINGS.md). [LEARNINGS § "Fixing ref.txt audio/text mismatch doesn't recover accent if source recording is weak"](LEARNINGS.md). Commit `7b3bef3` (Eir ref.txt fix). Freya v1/v2 entries in `personas/asgard/`.
+
+---
+
+## P2 — Refactor MLX TTS backends to a single generic `mlx_audio` backend (#59)
+
+**Priority.** P2 — pre-emptive cleanup before we add a second MLX-backed model. Adding Qwen3-TTS-VoiceDesign (#60) as a new `qwen3_tts_mlx.py` would duplicate 90% of `higgs_mlx.py`'s code; better to refactor once.
+
+**Effort.** ~half-day. Pull `higgs_mlx.py`'s threading/streaming machinery into a generic `mlx_audio.py` backend that takes `mlx_audio_model_path` as a config field. Higgs becomes `mlx_audio_model_path="mlx-community/higgs-audio-v2-3B-mlx-q6"`; future Qwen3 becomes `mlx_audio_model_path="mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"`.
+
+**Worth it when.** Before #60 (Qwen3-TTS-VoiceDesign provider) lands. If we add Qwen3 first as a separate backend module, we accrue 600+ lines of near-duplicated code; if we refactor first, Qwen3 is a fleet.yaml line + a config dict.
+
+**Context.** `mlx-audio` (Apache-2, `Blaizzy/mlx-audio` on PyPI) is a unified runtime: same `load_model + generate_audio` API for every TTS model in the mlx-community HuggingFace org. The model-specific differences live in the model's MLX-quantized weights, not in the loading code.
+
+**Design.**
+- New module: `src/voice_forge/backends/mlx_audio.py` (~400 LOC, mostly relocated from `higgs_mlx.py`).
+- Config schema: `{"model_path": str, "device": str, "max_workers": int}`.
+- Per-model quirks (e.g. Higgs needs `audio_processing/` post-install clone) move to `_<model>_post_install.py` modules selected at install time by model_path.
+- Keep `higgs_mlx` as an alias for the duration of v0.2.x backwards compat — emit deprecation warning pointing at `mlx_audio` + `model_path=mlx-community/higgs-audio-v2-3B-mlx-q6`.
+
+**Risk.** The ThreadPoolExecutor / MLX-thread-local-stream binding (the production fix that kept higgs-mlx alive inside FastAPI) must be re-validated under the generic shape. Re-run the 10-call silence-check (`~/.claude/jobs/1d06b8bd/higgs_mlx_silence_check.py` adapted) against the refactored backend before declaring done.
+
+**Refs.** [LEARNINGS § "mlx-community on HuggingFace is the free-port repository for Apple Silicon ML"](LEARNINGS.md). Commit `c8f4d90` (current higgs-mlx). Upstream API: `mlx_audio.tts.utils.load_model`.
+
+---
+
+## P2 — Add Qwen3-TTS-VoiceDesign as a voice_design provider (#60)
+
+**Priority.** P2 — local-open-source Voice Design analog to ElevenLabs. Cuts a paid-API dependency, quadruples the description char cap (2048 vs ElevenLabs's silent 500), keeps descriptions on-device.
+
+**Effort.** ~1 day. Depends on #59 (generic `mlx_audio` backend) landing first; otherwise duplicates Higgs-MLX scaffolding.
+
+**Worth it when.** After #59 lands AND either (a) ElevenLabs billing becomes a real cost concern, OR (b) a new persona needs a >500-char phonetic description, OR (c) we want to demonstrate end-to-end fully-local voice design + cloning + render on Apple Silicon. Privacy story improves immediately.
+
+**Context.** `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16` — Apache-2, Qwen3-1.7B backbone, supports BOTH voice cloning (`ref_audio` + `ref_text`) and voice design (`instruct` parameter). Description language: Chinese OR English. Synthesis language: any supported (decoupled). 2048-char description cap.
+
+**Design.**
+- New module: `src/voice_forge/voice_design/qwen3_tts.py` mirroring `voice_design/elevenlabs.py` shape (audition + persist + library-browse stubs where applicable).
+- Provider abstraction: `VoiceDesignProvider` Protocol in `voice_design/__init__.py` — `audition(description, previews=3) -> list[Preview]`, `persist(preview) -> voice_id`. Both ElevenLabs and Qwen3 implement it.
+- CLI: `voice-forge-design audition --provider qwen3 --persona mimir` (default provider stays elevenlabs for v0.2.x; flip default in v0.3).
+- Reuse the generic mlx_audio backend from #59 for the actual model load + synth call.
+
+**Open questions.**
+- Does the `mlx-audio` port expose `generate_voice_design()` separately from `generate_audio()`? If not, the `instruct` parameter has to thread through `generate_audio`'s kwargs — verify by reading the mlx-audio source before designing the provider API.
+- Quality vs ElevenLabs on Norwegian phonetic-imperative prompts is unverified. First audition: re-design Mimir from his current description via Qwen3 → compare by ear.
+
+**Refs.** [LEARNINGS § "Qwen3-TTS-VoiceDesign is the local-open-source Voice Design analog to ElevenLabs"](LEARNINGS.md). Upstream model card: `https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16`. Depends on #59.
+
+---
+
+## P1 — higgs-mlx: server-side retry-on-silence guard (#61)
+
+**Priority.** P1 — gates higgs-mlx adoption as the default Asgard backend. Today, half of Mimir's higgs-mlx calls return silence. The transformers `higgs` backend remains production until this lands.
+
+**Effort.** ~2-3 hours. Wrap `higgs_mlx.synthesize()` with a retry-on-silence loop. Reuse the verification harness at `~/.claude/jobs/1d06b8bd/higgs_mlx_silence_check.py` (or relocate to `tests/functional/higgs_mlx_silence_check.py`) for the success-criteria check.
+
+**Worth it when.** Now-ish. higgs-mlx delivers ~9× speedup over the transformers `higgs` backend (0.27-0.35× RTF vs 2.45-3× RTF on M2 Ultra) for mainstream-distribution voices, but the bimodal silence-collapse failure on distribution-edge voices (Mimir, likely Freya / Trjegul by extension) makes it unsafe as default without retry. The retry math is favorable: 50% per-call → 12.5% per-utterance after 3 retries → ~6% after 4 → ~3% after 5.
+
+**Context.** Verified 2026-05-26 with a 10-call cold sweep on Mimir's reference: exactly 5/10 returned silence (peak < 0.05, RMS < 0.005); the other 5 returned full-amplitude clean speech (peak 0.47-0.77, RMS 0.03-0.06). No intermediate outcomes — bimodal. Mechanism (per LEARNINGS): the autoregressive decoder picks an audio-token trajectory near generation start; for distribution-edge voices the trajectory is a near-coin-toss between valid-speech and silence-basin trajectories. The full-precision transformers `higgs` backend doesn't exhibit this — the sharpness of its next-token distribution at the distribution edge biases away from the silence basin.
+
+**Design.**
+```python
+def synthesize(self, text: str, ref: VoiceRef) -> np.ndarray:
+    max_retries = self._config.get("max_silence_retries", 3)
+    silence_peak_threshold = 0.05
+    for attempt in range(max_retries + 1):
+        pcm = self._synth_once(text, ref)
+        peak = float(np.max(np.abs(pcm))) if pcm.size else 0.0
+        if peak >= silence_peak_threshold:
+            return pcm
+        # else: silence detected, retry; emit a metric
+        _METRICS["higgs_mlx_silence_retries"].labels(voice_id=ref.voice_id).inc()
+    # Exhausted retries — return last attempt + log loudly.
+    log.warning("higgs-mlx exhausted %d silence retries for voice %r; returning silent PCM", max_retries, ref.voice_id)
+    return pcm
+```
+
+Streaming variant (#21-style sentence pipelining) needs the same guard at sentence granularity, not utterance.
+
+**Acceptance criteria.**
+- 10-call sweep on Mimir post-retry: silence rate < 5%.
+- Worst-case latency on a silence-prone voice: documented as `(max_retries + 1) × RTF × audio_length`.
+- New Prometheus metric `higgs_mlx_silence_retries_total{voice_id=...}` so operators see the cost.
+- Once acceptance met, flip `higgs-mlx` to default for Mimir / Freya / Trjegul in the persona fleet.
+
+**Refs.** [LEARNINGS § "higgs-mlx 50% silence-collapse on distribution-edge voices — bimodal failure mode"](LEARNINGS.md). Verification script: `~/.claude/jobs/1d06b8bd/higgs_mlx_silence_check.py` (relocate before job teardown). Commit `c8f4d90` (higgs-mlx backend), commit `90f0067` (LEARNINGS entry verifying 50% rate).

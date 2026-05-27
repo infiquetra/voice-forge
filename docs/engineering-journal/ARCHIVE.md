@@ -9,6 +9,20 @@
 
 ---
 
+## SUPERSEDED 2026-05-26 — Tune F5 voices for accent retention (#20)
+
+**From QUEUED P2 / Task #20:** "Tune F5 voices for accent retention" — the four problem Asgard voices (Mimir / Freya / Eir / Trjegul) lose their Nordic-English accent through F5 cloning. Original plan: tune `nfe_step`, `cfg_strength`, `speed`, and reference content to recover.
+
+**Why closed.** F5-TTS cannot preserve heavy non-default accents — architectural ceiling, not a tunable. Verified 2026-05-26 across 10+ knob configurations × 4 voices × multiple reference variants. The diffusion decoder weights the standard-English phoneme stream heavier than the reference's mel context, and that ratio is baked into the model — no knob exposes it. F5 preserves accent on 5/9 sisters whose source recordings already align with the model's phoneme defaults; it strips accent on the 4 whose recordings don't, regardless of tuning.
+
+**What we did instead.** Per-voice backend selection: F5 stays default for Beyla / Saga / Bygul / Gersemi / Heid (where accent is preserved); Higgs Audio V2 (LLM-backbone, in-context-learning cloning) handles Mimir / Freya / Trjegul where accent must be preserved. Eir is a separate case — the source recording itself has weak accent characteristics; queued for re-design with phonetic-imperative description (see [QUEUED #58](QUEUED.md)).
+
+**Revisit when.** F5 ships an architecture change that exposes the phoneme/mel weighting ratio as a parameter, OR upstream releases an F5 variant trained on a more accent-diverse corpus (current model is American/British-English-heavy). Neither is on F5's published roadmap.
+
+**Refs.** [LEARNINGS § "F5-TTS cannot preserve heavy non-default accents — architectural ceiling, not a tunable"](LEARNINGS.md). [LEARNINGS § "LLM-backbone cloning models preserve accent where diffusion + VITS-derived models strip it"](LEARNINGS.md). Commit `7b3bef3` (per-voice backend split). [QUEUED #58 Re-design Eir](QUEUED.md), [QUEUED #61 higgs-mlx retry guard](QUEUED.md).
+
+---
+
 ## SHIPPED 2026-05-25 — v0.3 hardening + 3 new subprocess-isolated backends + demo UX rebuild
 
 **From QUEUED:** P1 subprocess-isolated backend pattern; P2 per-voice tunable sampling; P2 streaming layer-2 (WS); P3 Pre-commit + bandit; P3 OpenAI-API auth (deferred — see QUEUED).

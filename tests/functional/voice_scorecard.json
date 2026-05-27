@@ -1,1 +1,85 @@
-{}
+{
+  "Beyla": {
+    "chatterbox": {
+      "matches_original": "no",
+      "notes": "Has accent. Not exactly same as reference. but issues between sentences. very long pauses, \"tiney\" sounding voice",
+      "updated_at": "2026-05-26T03:29:32.324733+00:00"
+    },
+    "dia": {
+      "matches_original": "no",
+      "notes": "Every sentence is a different voice, not just different accent. Sounds like totally different person",
+      "updated_at": "2026-05-26T02:48:23.323650+00:00"
+    },
+    "f5": {
+      "matches_original": "yes",
+      "notes": "Has accent. Not exactly the same as reference, but close enough",
+      "updated_at": "2026-05-26T03:37:38.005888+00:00"
+    },
+    "neutts": {
+      "matches_original": "no",
+      "notes": "Has accent. Not exactly same as reference. but issues between sentences. very long pauses, \"tiney\" sounding voice",
+      "updated_at": "2026-05-26T03:29:26.450225+00:00"
+    },
+    "xtts": {
+      "matches_original": "no",
+      "notes": "Has accent, but fades towards end of medium. Not exactly same as reference. but issues between sentences. very long pauses. \"tiny\" sounding voice",
+      "updated_at": "2026-05-26T02:44:43.295324+00:00"
+    }
+  },
+  "Bygul": {
+    "f5": {
+      "matches_original": "yes",
+      "notes": "Has accent. Not exactly the same as reference, but close enough. Had to increate cfg_strength and reduce speed to get it right",
+      "updated_at": "2026-05-26T16:07:20.820020+00:00"
+    }
+  },
+  "Eir": {
+    "f5": {
+      "matches_original": "no",
+      "notes": "sounds ok, but no accent at all. Almost sounds like it was trained on freya's first original instead of Eir's",
+      "updated_at": "2026-05-26T03:53:23.865958+00:00"
+    }
+  },
+  "Freya": {
+    "f5": {
+      "matches_original": "no",
+      "notes": "sounds ok, but no accent at all.",
+      "updated_at": "2026-05-26T03:53:40.010749+00:00"
+    }
+  },
+  "Gersemi": {
+    "f5": {
+      "matches_original": "yes",
+      "notes": "Has accent. Not exactly the same as reference, but close enough.",
+      "updated_at": "2026-05-26T16:10:33.801487+00:00"
+    }
+  },
+  "Heid": {
+    "f5": {
+      "matches_original": "yes",
+      "notes": "Has accent. Not exactly the same as reference, but close enough.",
+      "updated_at": "2026-05-26T16:08:51.767120+00:00"
+    }
+  },
+  "Hnoss": {
+    "f5": {
+      "matches_original": "yes",
+      "notes": "It's a match, but the original has English accent instead of nordic. ",
+      "updated_at": "2026-05-26T16:10:07.572543+00:00"
+    }
+  },
+  "Saga": {
+    "f5": {
+      "matches_original": "yes",
+      "notes": "Has accent. Not exactly the same as reference, but close enough.",
+      "updated_at": "2026-05-26T16:10:40.067369+00:00"
+    }
+  },
+  "Trjegul": {
+    "f5": {
+      "matches_original": "no",
+      "notes": "sounds fine, but no accent. ",
+      "updated_at": "2026-05-26T16:12:18.209187+00:00"
+    }
+  }
+}
