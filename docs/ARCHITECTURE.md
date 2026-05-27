@@ -36,8 +36,13 @@ HTTP client (hermes-agent shim, curl, OpenAI SDK, etc.)
         ┌──────────┐          ┌──────────┐         ┌──────────┐
         │ NeuTTS   │          │ Kokoro   │         │ XTTS-v2  │
         │ backend  │          │ backend  │         │ backend  │
-        │ (v0)     │          │ (v0.2)   │         │ (v0.3+)  │
+        │ (v0.1)   │          │ (v0.2)   │         │ (v0.3+)  │
         └──────────┘          └──────────┘         └──────────┘
+
+Dispatch (v0.2+): voice's `metadata.backend` field is looked up in
+`backends._BACKEND_MODULES` (name → import path); `load_backend_module()`
+triggers the target module's import-time `register_backend()` side effect;
+`get_backend(name)` then returns the class. No hard-coded branches anywhere.
 
 Side-channel: Voice Lab
 ┌──────────────────────────────────────────────────────────────┐
@@ -192,3 +197,5 @@ WebSocket + Wyoming bidirectional streaming are tracked in v0.2 (see [ROADMAP.md
 ## Future directions
 
 See [ROADMAP.md](ROADMAP.md) for the full backend + feature roadmap.
+
+For per-backend reference (license, voice paradigm, RTF, resident-memory cost, deployment-host capacity, "pick this backend when..." decision guide), see [BACKENDS.md](BACKENDS.md).

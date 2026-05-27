@@ -1,0 +1,1 @@
+I'm not yet convinced this plan handles the failure mode you mentioned last week. Walk me through it. What happens if the first step takes twice as long as you estimate?

@@ -3,8 +3,8 @@ requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [project]
-name = "voice-forge"
-version = "0.1.0-pre"
+name = "voice-forge-tts"
+version = "0.2.0"
 description = "Pluggable TTS service for agent voices — synthesis, cloning, voice lab, registry"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -12,25 +12,29 @@ requires-python = ">=3.11"
 authors = [
     { name = "Jeffrey Cox", email = "jeff@infiquetra.com" },
 ]
+# Note: import name is `voice_forge` (PEP 8); the PyPI distribution name is
+# `voice-forge-tts` because the bare `voice-forge` name on PyPI was already
+# taken by an unrelated project before v0.1.0 published.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
-    "httpx>=0.27",
     "pydantic>=2.6",
     "numpy>=1.26",
     "soundfile>=0.12",
     "pyyaml>=6.0",
     "click>=8.1",
     "python-multipart>=0.0.9",  # FastAPI File/Form deps
+    "prometheus-client>=0.20",  # /metrics endpoint
+    "psutil>=5.9",              # RSS measurement for backend load/unload reporting
+    "cryptography>=42",         # voice_forge.secrets — Ansible Vault 1.1 codec
 ]
 
 [project.optional-dependencies]
@@ -38,9 +42,177 @@ neutts = [
     # NeuTTS-Air backend (CPU/Metal-friendly, instant cloning)
     "neutts[llama]>=1.2",
 ]
+kokoro = [
+    # Kokoro-82M backend (PyTorch + MPS-capable; preset voices)
+    # NOTE: requires `espeak-ng` on the host PATH (brew install espeak-ng).
+    "kokoro>=0.9.4,<1.0",
+]
+f5 = [
+    # F5-TTS backend (PyTorch + MPS-capable diffusion; voice cloning).
+    # Wrapper is MIT-licensed; model weights from SWivid/F5-TTS are Apache-2.
+    "f5-tts>=1.1,<2.0",
+    # torch + torchaudio + torchcodec ABI lockstep:
+    # torchaudio 2.9 hard-removes the soundfile-backed `load()` and routes
+    # everything through torchcodec. torchcodec 0.8+ for torch 2.9.x is
+    # currently shipping with a libtorch_cpu symbol mismatch on macOS
+    # (`_aoti_torch_aten_subtract_Tensor` not found). torch 2.8.0 +
+    # torchaudio 2.8.0 + torchcodec 0.7.0 is the last verified-working
+    # trio on this host — pin it explicitly until upstream resolves the ABI.
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
+    "torchcodec>=0.7,<0.8",
+]
+xtts = [
+    # XTTS-v2 backend via Coqui idiap fork (MPL-2.0; multilingual + cloning).
+    # transformers<5 pin: coqui-tts 0.27.5 imports
+    # `transformers.pytorch_utils.isin_mps_friendly` which was removed in v5.
+    # Lift the pin when upstream coqui-tts catches up to transformers 5.x.
+    "coqui-tts>=0.27,<0.30",
+    "transformers<5",
+]
+dia = [
+    # Dia-1.6B backend (Apache-2, nari-labs/Dia-1.6B-0626; multi-speaker + cloning).
+    # No standalone PyPI package — accessed via HF Transformers's native
+    # DiaForConditionalGeneration class (added in transformers 4.46+).
+    # `librosa` for 44.1 → 24 kHz resampling.
+    "transformers>=4.46,<5",
+    "librosa>=0.10",
+]
 voice-lab = [
     # ElevenLabs Voice Lab puller + Whisper ref-trimmer
     "faster-whisper>=1.0",
+]
+piper = [
+    # Piper TTS — GPL-3, runs subprocess-isolated. The parent voice-forge
+    # process never imports this; only `voice-forge backend install piper`
+    # pulls it into the per-backend venv at ~/.voice-forge/backends/piper/.venv/
+    "piper-tts>=1.2",
+]
+chatterbox = [
+    # Chatterbox-Turbo — MIT, sub-200ms latency cloning. Hostile dep pins
+    # require subprocess isolation; same install pattern as piper.
+    # 0.1.7+ pin: earlier versions (≤0.1.3) pulled in pkuseg 0.0.25 whose
+    # build_meta is broken (missing numpy in build-system.requires).
+    # See LEARNINGS 2026-05-25 § "Upstream packaging defects discovered ...".
+    "chatterbox-tts>=0.1.7",
+]
+melotts = [
+    # MeloTTS — MIT multilingual preset voices. Subprocess-isolated to keep
+    # its transformer + torch pins away from the main voice-forge venv.
+    # NOTE: as of 2026-05-25 the PyPI sdist for melotts==0.1.1 is broken
+    # (setup.py references src/requirements.txt which is not in the tarball).
+    # Install from the upstream git repo until a fixed release lands:
+    "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",
+]
+orpheus = [
+    # Orpheus TTS — Apache-2.0 Llama-3 3B-backbone autoregressive TTS from
+    # Canopy Labs. Subprocess-isolated because the model has its own pinned
+    # transformers/torch trio + the SNAC neural-codec dep stack.
+    #
+    # We deliberately do NOT pull `orpheus-speech` (the official PyPI
+    # wrapper). It depends on `vllm`, which is CUDA-only and cannot
+    # install on Apple Silicon — the entire reason this backend exists is
+    # to run on the M2 Ultra dev host. Instead, we drive raw
+    # `transformers` + `snac` directly in the child venv:
+    #
+    #   * `transformers` loads the Llama-3 3B audio-extended checkpoint
+    #     and runs `model.generate()` on torch's MPS / CUDA / CPU device.
+    #   * `snac` (Multi-Scale Neural Audio Codec, hubertsiuzdak/snac_24khz)
+    #     encodes the reference WAV → 3 codebook streams for in-context
+    #     priming and decodes the model's emitted audio tokens → 24 kHz
+    #     mono PCM.
+    #   * `librosa` is the resampler when refs arrive at 44.1 / 48 kHz.
+    #   * `soundfile` reads the reference WAV (matches the parent's audio
+    #     loader; redeclared here so the child venv is self-contained).
+    #
+    # See backends/orpheus.py for why we added this (F5 doesn't preserve
+    # heavy non-default accents).
+    "transformers>=4.46,<5",
+    "torch>=2.3",
+    "snac>=1.2.1",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "accelerate>=0.30",
+]
+higgs = [
+    # Higgs Audio V2 — Boson AI's multimodal audio foundation model. Open
+    # weights, ~3B params. Subprocess-isolated like every LLM-backbone
+    # backend so its transformers+torch pins stay out of the main venv.
+    #
+    # IMPORTANT: the upstream `boson_multimodal` wheel built via setuptools
+    # default `find_packages` SILENTLY DROPS two subdirectories that lack
+    # `__init__.py` markers: `serve/` and `audio_processing/`. The audio
+    # tokenizer (required for voice cloning) lives in the latter, so a
+    # post-install hook (`_higgs_post_install.py`) clones the upstream repo
+    # and copies the missing tree into the venv's site-packages. See
+    # `backends/higgs.py` and `cli.py:backend_install`'s POST_INSTALL_HOOK
+    # invocation for the wiring. Upstream issue not filed yet (2026-05-26).
+    #
+    # transformers pin matches upstream's requirements.txt range to avoid
+    # picking up an incompatible major release once they ship 4.47+.
+    "boson-multimodal @ git+https://github.com/boson-ai/higgs-audio.git",
+    "transformers>=4.45.1,<4.47",
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "huggingface-hub>=0.24",
+    "accelerate>=0.26",
+    "vector-quantize-pytorch>=1.14",
+    "descript-audio-codec>=1.0",
+    "dacite>=1.8",
+    "loguru>=0.7",
+    "tqdm>=4.66",
+    "pandas>=2.0",
+    "click>=8.1",
+    "jieba>=0.42",
+    "langid>=1.1",
+    # omegaconf is a transitive dep of the post-install-patched
+    # audio_processing/quantization/ddp_utils.py — upstream doesn't list it
+    # in their pyproject because their installable wheel doesn't ship that
+    # subtree (the very defect we patch around). Declared explicitly so the
+    # higgs venv stays self-contained.
+    "omegaconf>=2.3",
+]
+higgs-mlx = [
+    # Higgs Audio V2 - MLX port. Sibling extra to `higgs`; this one is
+    # Apple-Silicon-only. Same model, dramatically faster on M-series
+    # hardware (~0.33x RTF at q6 on M5 Max per the model card; the
+    # transformers `higgs` extra runs ~2.45-3x slower than realtime on
+    # M2 Ultra MPS).
+    #
+    # Source pin: branch `higgs-overlap-add-streaming` on the
+    # `kaioct-labs/mlx-audio` fork. The MLX port is pending merge into
+    # `Blaizzy/mlx-audio` upstream; the fork's branch is the source of
+    # record for `HiggsAudioServer` until upstream merges. Once merged,
+    # switch this to `mlx-audio>=<version-with-higgs-merged>` from PyPI.
+    #
+    # No transformers/torch pin needed here - mlx-audio already pulls
+    # the transformers version it needs (>=5.5.0), and torch is NOT a
+    # dep of mlx-audio (it's a pure-MLX runtime).
+    #
+    # Unlike the transformers `higgs` extra, the MLX fork ships a clean
+    # setuptools package with explicit `find_packages(include=['mlx_audio',
+    # 'mlx_audio.*'])` so all subpackages land in site-packages - no
+    # post-install hook required (compare _higgs_post_install.py which
+    # patches around boson_multimodal's missing __init__.py files).
+    "mlx-audio @ git+https://github.com/kaioct-labs/mlx-audio.git@higgs-overlap-add-streaming",
+    "huggingface-hub>=0.24",
+    "soundfile>=0.12",
+    "scipy>=1.10",
+    "numpy>=1.26",
+]
+subprocess-shim = [
+    # Lightweight HTTP shim used inside per-backend venvs. The parent already
+    # has fastapi + uvicorn from base deps; this extra exists so backend venvs
+    # can `pip install "voice-forge-tts[<backend>,subprocess-shim]"` without
+    # dragging in NeuTTS / F5 / etc.
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+all = [
+    "voice-forge-tts[neutts,kokoro,f5,xtts,dia,voice-lab]",
 ]
 dev = [
     "pytest>=8.0",
@@ -48,10 +220,46 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "black>=24.0",
+    "bandit>=1.7",
+    "pre-commit>=3.7",
 ]
 
 [project.scripts]
 voice-forge = "voice_forge.cli:main"
+voice-forge-backend-shim = "voice_forge.subprocess_shim:main"
+voice-forge-secrets = "voice_forge.secrets.cli:main"
+
+[tool.hatch.metadata]
+# Needed because the [melotts] extra references a git+https URL (PyPI sdist
+# is broken — see comment on that extra). When melotts ships a fixed PyPI
+# release, this can drop back to false.
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+# Dist name is voice-forge-tts but the import package is voice_forge.
+# Hatchling can't auto-derive that mapping from the renamed dist; declare it.
+packages = ["src/voice_forge"]
+# personas/ holds user-specific voice fleets (e.g. personas/asgard/ is the
+# maintainer's Asgard fleet). These are intentionally kept in the repo
+# for dev workflow + as a worked schema example, but never installed.
+exclude = ["personas/**"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/voice_forge",
+    "tests",
+    "docs",
+    "docker",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+# Same exclusion at the sdist level — hatchling auto-includes README.md
+# files from any discovered subdir, so without this the personas/*/README
+# files leak into the source archive even though their parent dir isn't
+# in the include list above.
+exclude = ["personas/**"]
 
 [project.urls]
 Homepage = "https://github.com/infiquetra/voice-forge"
@@ -80,7 +288,40 @@ strict_optional = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 
+[[tool.mypy.overrides]]
+# Third-party packages without py.typed markers / shipped stubs. We don't
+# control them; suppress import-not-found / missing-stub noise.
+module = [
+    "neutts",
+    "llama_cpp",
+    "faster_whisper",
+    "kokoro",
+    "f5_tts",
+    "f5_tts.*",
+    "TTS",
+    "TTS.*",
+    "soundfile",
+    "librosa",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+
+[tool.bandit]
+# Files / paths bandit shouldn't scan. Tests + scripts intentionally use
+# patterns (assert, subprocess, tempfile) that would noise up the report
+# without finding real production issues.
+exclude_dirs = ["tests", "scripts", ".venv", ".audition-registry", "docs", "_porting"]
+
+# Skips:
+#   B101 - assert_used: pytest uses assert; tests are excluded but stubs
+#          inside src/voice_forge/backends/_subprocess.py and similar may
+#          legitimately use assert as type-narrow guards
+#   B404 - import_subprocess: we use subprocess intentionally (FFmpeg shell-out,
+#          voice-forge serve auto-launch in tests, future subprocess pattern
+#          for hostile-dep backends). Track real subprocess.run() risks via
+#          B603 / B607 instead.
+skips = ["B101", "B404"]

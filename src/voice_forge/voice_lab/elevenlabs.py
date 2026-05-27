@@ -18,10 +18,31 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 ELEVENLABS_VOICE_ENDPOINT = "https://api.elevenlabs.io/v1/voices/{voice_id}"
+
+
+def _safe_urlopen(target: str | urllib.request.Request, **kwargs):
+    """Wrap urllib.request.urlopen with an explicit https-only scheme guard.
+
+    Either a URL string or a pre-built ``urllib.request.Request`` is accepted.
+    ElevenLabs API responses include ``preview_url`` strings that we download
+    — bandit flags bare ``urlopen()`` because it would technically follow
+    ``file://`` or ``ftp://`` schemes. We've never seen ElevenLabs return
+    anything other than ``https://`` previews, but enforce it explicitly so
+    a future API change can't silently let us read a local file.
+    """
+    url = target if isinstance(target, str) else target.full_url
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        raise ValueError(
+            f"refusing to open URL with non-http(s) scheme: {parsed.scheme!r} (url={url!r})"
+        )
+    return urllib.request.urlopen(target, **kwargs)  # nosec B310 — scheme validated above
 
 
 def _find_ffmpeg() -> str:
@@ -48,7 +69,7 @@ def fetch_voice_metadata(voice_id: str, api_key: str | None = None) -> dict:
         ELEVENLABS_VOICE_ENDPOINT.format(voice_id=voice_id),
         headers={"xi-api-key": key, "Accept": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with _safe_urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -78,11 +99,11 @@ def pull_preview(
         raise ValueError(f"voice {voice_id!r} has no preview_url in ElevenLabs metadata")
 
     if output_path is None:
-        output_path = Path(f"/tmp/voice_forge_{voice_id}_preview.mp3")
+        output_path = Path(tempfile.gettempdir()) / f"voice_forge_{voice_id}_preview.mp3"
     output_path = Path(output_path).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with urllib.request.urlopen(preview_url, timeout=60) as resp:
+    with _safe_urlopen(preview_url, timeout=60) as resp:
         output_path.write_bytes(resp.read())
     return output_path
 
@@ -139,7 +160,7 @@ def pull_and_prepare(
         (wav_path, ref_text) — ready to hand to registry.register().
     """
     if output_dir is None:
-        output_dir = Path("/tmp") / f"voice_forge_{voice_id}"
+        output_dir = Path(tempfile.gettempdir()) / f"voice_forge_{voice_id}"
     output_dir = Path(output_dir).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
 

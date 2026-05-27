@@ -9,11 +9,29 @@ See docs/ARCHITECTURE.md § "Core abstractions" for the full design.
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, TypedDict, runtime_checkable
 
 import numpy as np
+
+
+class TunableSpec(TypedDict, total=False):
+    """Schema for one per-voice sampling parameter.
+
+    A backend exposes its tunables via ``KNOWN_TUNABLES: dict[str, TunableSpec]``
+    so callers (CLI, REST clients, the demo page) can render a config UI without
+    hardcoded per-backend knowledge. Values picked from this schema flow into
+    ``VoiceRef.metadata['sampling'][<key>]`` and through to the backend's
+    ``synthesize()`` call.
+    """
+
+    type: Literal["int", "float", "bool", "string"]
+    min: float | int
+    max: float | int
+    default: float | int | bool | str
+    description: str
 
 
 @dataclass
@@ -27,6 +45,12 @@ class VoiceRef:
     - Kokoro:  preset_id
     - Kitten:  preset_id
     - Dia:     ref_audio_path (audio prompt)
+
+    ``persona`` is the human-meaningful identity that may be shared by
+    multiple voice rows under different backends (e.g. ``saga-comms``
+    and ``saga-comms-f5`` are the same persona "Saga" rendered through
+    NeuTTS and F5 respectively). Optional — the demo picker derives a
+    fallback by stripping known backend suffixes when None.
     """
 
     voice_id: str
@@ -36,6 +60,7 @@ class VoiceRef:
     preset_id: str | None = None
     encoded_codes: list | None = None
     metadata: dict = field(default_factory=dict)
+    persona: str | None = None
 
 
 @runtime_checkable
@@ -48,6 +73,12 @@ class TTSBackend(Protocol):
     """
 
     name: str
+    # KNOWN_TUNABLES advertises which sampling overrides the backend honors.
+    # Used by GET /v1/backends to drive the demo page's conditional knob panel.
+    # Each value should follow the TunableSpec shape; we type the outer dict
+    # loosely here to keep plain-dict-literal class attributes compatible.
+    # Empty {} is valid (NeuTTS has no per-voice tunables today).
+    KNOWN_TUNABLES: dict
 
     def load(self, config: dict) -> None:
         """Load model weights + warm up. Called once per backend instance."""
@@ -76,9 +107,61 @@ class TTSBackend(Protocol):
         """Return diagnostics. Suggested keys: model, device, loaded (bool), warm (bool)."""
         ...
 
+    def unload(self) -> None:
+        """Release model state held by this backend instance.
 
-# Registry of installed backends. Phase D populates this with actual classes.
+        Implementations should ``del`` their model/pipeline/processor refs,
+        ``gc.collect()``, and ask the underlying framework to drop cached
+        device memory (``torch.mps.empty_cache()`` / ``torch.cuda.empty_cache()``
+        where applicable). Idempotent — calling ``unload()`` on an already-
+        unloaded backend should be a no-op.
+
+        Realistic recovery is ~70-90% of the backend's resident memory.
+        Framework caches (PyTorch MPS allocator, HuggingFace cache pages,
+        loaded shared libraries) persist until process restart. The
+        management endpoint reports actual reclaimed bytes so callers see
+        the residual.
+        """
+        ...
+
+
+# Registry of installed backend classes, populated by register_backend()
+# at import time of each backend module.
 _REGISTRY: dict[str, type[TTSBackend]] = {}
+
+# Name → module-path map. Adding a new backend means: drop a module under
+# this package, call register_backend(name, cls) at module top-level, and
+# add an entry here. Kept explicit (not entry-points) so the supported set
+# is grep-able from the source tree.
+_BACKEND_MODULES: dict[str, str] = {
+    "neutts": "voice_forge.backends.neutts",
+    "kokoro": "voice_forge.backends.kokoro",
+    "f5": "voice_forge.backends.f5",
+    "xtts": "voice_forge.backends.xtts",
+    "dia": "voice_forge.backends.dia",
+    # Subprocess-isolated backends (provisioned via `voice-forge backend install`).
+    # The parent-side modules are always importable (they just wrap
+    # SubprocessBackend); attempting to load() raises SubprocessBackendNotInstalled
+    # with a clear message until the per-backend venv exists.
+    "piper": "voice_forge.backends.piper",
+    "chatterbox": "voice_forge.backends.chatterbox",
+    "melotts": "voice_forge.backends.melotts",
+    # LLM-backbone cloning models — added 2026-05-26 after exhaustive
+    # testing showed F5/diffusion strips heavy non-default accents
+    # regardless of knob tuning. Llama-backed (orpheus) and multimodal-
+    # foundation (higgs) architectures can in-context-learn voice
+    # characteristics including accent. See LEARNINGS § "F5 can't do
+    # male Nordic English no matter what you feed it".
+    "orpheus": "voice_forge.backends.orpheus",
+    "higgs": "voice_forge.backends.higgs",
+    # MLX-port sibling of `higgs`. Apple-Silicon-only; ~10x faster on M2
+    # Ultra than the transformers-based `higgs` (which uses MPS via
+    # PyTorch and runs ~2.45-3x slower than realtime). Pulls the
+    # `mlx_audio.tts.models.higgs_audio.HiggsAudioServer` API from the
+    # `kaioct-labs/mlx-audio` fork's `higgs-overlap-add-streaming` branch
+    # (pending upstream merge to Blaizzy/mlx-audio).
+    "higgs-mlx": "voice_forge.backends.higgs_mlx",
+}
 
 
 def register_backend(name: str, backend_cls: type[TTSBackend]) -> None:
@@ -94,3 +177,21 @@ def get_backend(name: str) -> type[TTSBackend]:
 def available_backends() -> list[str]:
     """List names of registered backends."""
     return sorted(_REGISTRY.keys())
+
+
+def known_backends() -> list[str]:
+    """List names of backends voice-forge knows about (even if not yet imported)."""
+    return sorted(_BACKEND_MODULES.keys())
+
+
+def load_backend_module(name: str) -> None:
+    """Import a known backend module to trigger its ``register_backend()`` side effect.
+
+    Raises:
+        KeyError: ``name`` is not in ``_BACKEND_MODULES``.
+        ImportError: the module exists in the map but its optional deps are
+            not installed (e.g. ``pip install voice-forge-tts[kokoro]`` not run).
+    """
+    if name not in _BACKEND_MODULES:
+        raise KeyError(f"unknown backend: {name!r}; known backends: {sorted(_BACKEND_MODULES)}")
+    importlib.import_module(_BACKEND_MODULES[name])

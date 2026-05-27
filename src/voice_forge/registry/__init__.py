@@ -31,6 +31,36 @@ def _voice_dir(root: Path, voice_id: str) -> Path:
     return root / voice_id
 
 
+def _derive_persona(voice_id: str, backend: str, known_backends: tuple[str, ...]) -> str:
+    """Fallback persona derivation when metadata doesn't carry one.
+
+    Strips a trailing ``-<backend>`` suffix where backend is in the
+    closed set we know about. Anything else returns voice_id verbatim.
+    Example: ``saga-comms-f5`` → ``saga-comms`` (one persona, two backend
+    rows). ``kokoro-bella`` stays as ``kokoro-bella`` since no known
+    backend suffix matches.
+    """
+    for known in known_backends:
+        suffix = f"-{known}"
+        if voice_id.endswith(suffix):
+            return voice_id[: -len(suffix)]
+    return voice_id
+
+
+_KNOWN_BACKEND_NAMES = (
+    "f5",
+    "neutts",
+    "kokoro",
+    "xtts",
+    "dia",
+    "piper",
+    "chatterbox",
+    "melotts",
+    "kitten",
+    "fast",  # nfe_step=16 variants are tagged "-fast" but share the parent persona
+)
+
+
 def _load_voice(voice_dir: Path) -> VoiceRef:
     """Read metadata.json + assemble a VoiceRef for one voice directory."""
     meta_path = voice_dir / "metadata.json"
@@ -38,10 +68,18 @@ def _load_voice(voice_dir: Path) -> VoiceRef:
         raise FileNotFoundError(f"missing metadata.json in {voice_dir}")
     meta = json.loads(meta_path.read_text())
     voice_id = meta.get("voice_id", voice_dir.name)
-    backend = meta.get("backend", "neutts")
+    # Default per DECISIONS 2026-05-25 was F5; the runtime-configured
+    # default (via PUT /v1/backends/default → ~/.voice-forge/config.json)
+    # overrides it. Legacy metadata.json files without an explicit backend
+    # field route to the configured default.
+    from voice_forge.config import get_default_backend
+
+    backend = meta.get("backend", get_default_backend())
     ref_wav = voice_dir / "ref.wav"
     ref_txt = voice_dir / "ref.txt"
     ref_text = ref_txt.read_text().strip() if ref_txt.exists() else None
+    explicit_persona = meta.get("persona")
+    persona = explicit_persona or _derive_persona(voice_id, backend, _KNOWN_BACKEND_NAMES)
     return VoiceRef(
         voice_id=voice_id,
         backend=backend,
@@ -49,6 +87,7 @@ def _load_voice(voice_dir: Path) -> VoiceRef:
         ref_text=ref_text,
         preset_id=meta.get("preset_id"),
         metadata=meta,
+        persona=persona,
     )
 
 
@@ -121,3 +160,35 @@ class Registry:
 
     def exists(self, voice_id: str) -> bool:
         return _voice_dir(self.root, voice_id).exists()
+
+    def tune(
+        self,
+        voice_id: str,
+        sampling_overrides: dict | None = None,
+        *,
+        clear: bool = False,
+    ) -> VoiceRef:
+        """Update the ``sampling`` block of a voice's metadata.json.
+
+        Args:
+            voice_id: existing voice to tune. Raises KeyError if missing.
+            sampling_overrides: keys to set or update inside ``metadata['sampling']``.
+                Existing keys are preserved unless explicitly overwritten here.
+            clear: if True, remove the ``sampling`` block entirely. Takes precedence
+                over ``sampling_overrides`` for the same call.
+
+        Returns the refreshed VoiceRef.
+        """
+        voice_dir = _voice_dir(self.root, voice_id)
+        if not voice_dir.exists():
+            raise KeyError(f"voice not in registry: {voice_id!r}")
+        meta_path = voice_dir / "metadata.json"
+        meta = json.loads(meta_path.read_text())
+        if clear:
+            meta.pop("sampling", None)
+        elif sampling_overrides:
+            existing = dict(meta.get("sampling") or {})
+            existing.update(sampling_overrides)
+            meta["sampling"] = existing
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+        return _load_voice(voice_dir)

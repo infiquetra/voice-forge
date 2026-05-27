@@ -1,0 +1,4 @@
+# Audition output is reproducible from inputs (fleet.yaml + prompts.yaml +
+# responses.yaml). Each `output/<run_id>/` carries 27 WAVs + an HTML index;
+# they're heavy and not worth committing.
+output/

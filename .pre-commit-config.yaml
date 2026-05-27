@@ -1,0 +1,58 @@
+# Pre-commit hooks for voice-forge.
+#
+# Install once: `uv pip install -e ".[dev]" && pre-commit install`
+# Run on demand: `pre-commit run --all-files`
+#
+# CI runs the same set in .github/workflows/ci.yml — keeping the local +
+# remote gates aligned so contributors get the same feedback either way.
+
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        exclude: \.md$  # Markdown intentionally uses trailing-whitespace for hard line breaks.
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(src|tests|scripts)/
+
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 24.10.0
+    hooks:
+      - id: black
+        files: ^(src|tests|scripts)/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        files: ^src/
+        # mypy needs all the type stubs that the real env has, so install
+        # them into the hook's isolated env.
+        additional_dependencies:
+          - types-PyYAML
+          - pydantic>=2.6
+          - numpy>=1.26
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.0
+    hooks:
+      - id: bandit
+        # -ll: only report Medium + High severity. Low is noisy on legitimate
+        # patterns (subprocess + tempfile + assert) and adds friction without
+        # finding real bugs in our threat model.
+        args: [-ll, -c, pyproject.toml]
+        files: ^src/

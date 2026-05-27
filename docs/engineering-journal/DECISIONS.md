@@ -21,6 +21,70 @@
 
 ---
 
+## 2026-05-26
+
+### F5 nfe_step default flipped from 32 → 16 (commit pending)
+
+**Decision.** F5's `DEFAULT_NFE_STEP` is now **16**, not 32. Voices without an explicit `metadata.sampling.nfe_step` override get 16-step diffusion synthesis. The 32-step path is still reachable via `voice tune <id> --sampling nfe_step=32` for an explicit quality preset.
+
+The `*-fast` voices that were registered as nfe_step=16 variants (`saga-comms-f5-fast`, `heid-research-f5-fast`, `hnoss-books-f5-fast`) are deleted from the audition registry — redundant now that 16 is the parent default.
+
+**Rejected alternatives.**
+
+- **Keep 32 as default; expose 16 only as opt-in.** Was the original recommendation in [DECISIONS 2026-05-25 § F5-TTS is the default backend](DECISIONS.md). The hesitation was unproven quality cost. Quality has now been validated on the 11-sentence Saga narrative as audibly indistinguishable. The user has explicitly endorsed flipping the default. Sticking with 32 means every default-setup voice eats 2× the synth wall-time for no audible payoff.
+- **Make the default conditional on streaming-vs-batch mode** (e.g., `nfe_step=16` for `stream=true`, `32` for `stream=false`). Splits the abstraction; introduces a quality-vs-mode coupling that's harder to reason about. Single value across both paths is simpler + the right call given the equivalence finding.
+
+**Rationale.**
+
+- 11-sentence stress test in the live WS demo (2026-05-25): listener could not distinguish the two settings.
+- Wall-time savings on F5 are substantial. p3 narrative (~995 chars / 11 sentences): batch first-audio drops from ~62 s (nfe=32) to ~30 s (nfe=16); WS first-audio drops from ~6 s to ~3 s.
+- "Pay the latency tax by default, opt into the quality cost" is the wrong direction for streaming-default voice-forge. Better: default to the streaming-friendly value, document the quality-preset path for callers who specifically care.
+
+**Revisit when.**
+
+- F5 upstream ships a distilled / consistency-trained variant where the quality/step curve flattens enough that the default could go lower (8 or 12). Re-run the equivalence test against the new variant.
+- A listener with golden ears reports an audible degradation on real content we haven't tested. Capture the test case + walk the value back up to 24 or 32 for that voice via the per-voice override.
+
+**Refs.** Commit pending (Phase X of `.claude/plans/2026-05-25-voice-lab-tuning-workstation.md`). Supersedes the "16 is the streaming preset" framing in [DECISIONS 2026-05-25 § F5-TTS is the default backend](DECISIONS.md). [LEARNINGS 2026-05-25 § F5 nfe_step=16](LEARNINGS.md) is the empirical foundation.
+
+---
+
+## 2026-05-25
+
+### F5-TTS is the default backend (commit pending — see git log for hash)
+
+**Decision.** F5-TTS becomes the default backend across voice-forge:
+
+- `nfe_step=32` (F5 default) is the **quality preset** — used for batch synth via `POST /v1/audio/speech` and for voices the user explicitly wants to maximize timbre fidelity on.
+- `nfe_step=16` is the **streaming preset** — used for voices that drive layer-1 (HTTP chunked) and layer-2 (WS) streaming surfaces. Verified on a 995-char / 11-sentence Saga narrative as audibly indistinguishable from 32-step on the Mac Studio dev host ([LEARNINGS § F5 nfe_step=16](LEARNINGS.md)).
+
+Concrete code defaults flipped from `"neutts"` to `"f5"` in `server.py` (`FromElevenLabsRequest`, `POST /voices/{id}` form default), `cli.py` (`voice add`, `voice from-elevenlabs`), and `registry/__init__.py` (legacy-metadata fallback).
+
+**Rejected alternatives.**
+
+- **Keep NeuTTS Air as the default.** Was the v0.1 baseline because it shipped first and was already running in production on the Asgard daemon. Loses on three measurable axes: long-form coherence (30 s cliff, documented), short-utterance reliability (`heid-research × "Can you hear me?"` collapsed to 0.16 s of audio under autoregressive sampling), and resource cost (~5.6 GB resident vs F5's ~1.5 GB).
+- **Kokoro as the default.** Light (~1.4 GB), fast (RTF 0.07 CPU), Apache-2 — but **no cloning**. Defaults need to serve the agent-voice use case where cloning is the point; Kokoro is the right pick *for non-cloning voices*, not the right default.
+- **XTTS-v2.** Multilingual + clean — but cloning is pitch+gender-adapter only, no accent preservation ([LEARNINGS § cloning-fidelity spectrum](LEARNINGS.md)). CPML weights are also non-commercial; user has to accept that explicitly via `COQUI_TOS_AGREED=1`. Wrong default for a permissively-licensed library.
+- **Dia-1.6B.** Apache-2 + multi-speaker — but wrong gender on Heid in the audition, and default `max_new_tokens=3072` truncates long-form to ~18-21 s.
+- **Multiple defaults (per use case).** Considered: "default to NeuTTS for short cloning, F5 for long-form." Rejected as user-hostile — defaults should be a single answer.
+
+**Rationale.**
+
+- **F5 is the only backend that's identity-preserving AND coherent past 30 s.** That's the agent-voice use case voice-forge exists to serve.
+- **Cost of F5 as default is low.** ~1.5 GB resident (under one third of NeuTTS) and ~37 s cold-load. Mac mini M4 Pro production host (24 GB) accommodates F5 + Kokoro + NeuTTS all loaded simultaneously.
+- **The 32/16 step split is the right knob.** F5's diffusion-step count is a clean compute/quality lever; dropping to 16 halves synth time with no audible quality loss on the 11-sentence stress test. This means the same backend serves *both* high-quality batch and low-latency streaming use cases without a second model to maintain.
+- **Streaming-first matters for the hermes-agent integration.** The downstream consumer is an LLM-driven agent that needs first-audio in the 2-5 second range, not in the 60+ second range. F5 with nfe_step=16 is the only backend in the matrix that hits this AND preserves identity.
+
+**Revisit when.**
+
+- A backend ships that improves on F5 in measurable ways: lower latency at equivalent identity preservation, better long-form coherence, or a license that's cleaner than F5's MIT-wrapper-over-Apache-2-weights split (already pretty clean).
+- F5 upstream drops a step-distilled or consistency-distilled variant that lets us go to `nfe_step<16` without quality loss. Would let us close the gap with Kokoro on first-audio.
+- A real production load test demonstrates the F5 ~1.5 GB resident set is unmanageable on the deploy host. Current evidence says it's fine on 24 GB.
+
+**Refs.** [LEARNINGS 2026-05-25 § F5 nfe_step=16](LEARNINGS.md), [BACKENDS.md § At a glance](../BACKENDS.md), QUEUED → #20 (F5 accent retention tuning), #21 (WS pipelining), #16 (Chatterbox deferred).
+
+---
+
 ## 2026-05-24
 
 ### Apache 2.0 license (initial commit)

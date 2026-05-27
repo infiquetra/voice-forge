@@ -21,7 +21,6 @@ See the home-lab engineering journal for the discovery story:
 
 from __future__ import annotations
 
-import re
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -29,6 +28,7 @@ from typing import Any
 import numpy as np
 
 from . import VoiceRef, register_backend
+from ._chunking import chunk_text as _chunk_text  # re-exported for back-compat with prior tests
 
 DEFAULT_MODEL = "neuphonic/neutts-air-q8-gguf"
 DEFAULT_DEVICE = "cpu"
@@ -66,37 +66,22 @@ def _apply_neutts_patches(n_ctx: int, repeat_penalty: float) -> None:
             return _original_llama_call(self, *args, **kwargs)
 
         _patched_llama_call._voice_forge_patched = True  # type: ignore[attr-defined]
-        Llama.__call__ = _patched_llama_call
-
-
-def _chunk_text(text: str, max_chars: int) -> list[str]:
-    """Split text at sentence boundaries, respecting max_chars per chunk.
-
-    Sentences are detected by ``.!?`` followed by whitespace. A single
-    sentence longer than max_chars goes into its own chunk (we don't
-    split mid-sentence — that causes cloning quality drift).
-    """
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    chunks: list[str] = []
-    current: list[str] = []
-    current_len = 0
-    for sentence in sentences:
-        if current and current_len + len(sentence) + 1 > max_chars:
-            chunks.append(" ".join(current))
-            current = [sentence]
-            current_len = len(sentence)
-        else:
-            current.append(sentence)
-            current_len += len(sentence) + 1
-    if current:
-        chunks.append(" ".join(current))
-    return chunks
+        # Intentional monkey-patch of a method on the imported class — this is
+        # how llama_cpp ends up honoring repeat_penalty in BOTH batch and stream
+        # paths (NeuTTS's _infer_stream_ggml omits the kwarg natively).
+        Llama.__call__ = _patched_llama_call  # type: ignore[method-assign]
 
 
 class NeuTTSBackend:
     """NeuTTS Air backend — instant voice cloning from 3-15s reference WAV."""
 
     name = "neutts"
+
+    # NeuTTS's repeat_penalty is applied at backend-load time via a Llama.__call__
+    # monkey-patch (the only way to inject it into NeuTTS's autoregressive
+    # sampling without forking the upstream). Per-voice override would require
+    # thread-local state through the patch — see BACKENDS.md § NeuTTS quirks.
+    KNOWN_TUNABLES: dict = {}
 
     def __init__(self) -> None:
         self._tts: Any = None
@@ -188,6 +173,16 @@ class NeuTTSBackend:
             for chunk in chunks:
                 yield from self._tts.infer_stream(chunk, codes, ref_text)
 
+    def unload(self) -> None:
+        """Release NeuTTS's underlying Llama + codec models."""
+        import gc
+
+        if self._tts is None:
+            return
+        with self._lock:
+            self._tts = None
+        gc.collect()
+
     def health(self) -> dict:
         """Diagnostics for /health endpoint."""
         return {
@@ -216,7 +211,12 @@ class NeuTTSBackend:
             )
         # Cold encode each call. If you want this cached, pre-encode at registry
         # load time and stuff into ref.encoded_codes.
-        return self.encode_reference(ref.ref_audio_path), ref.ref_text
+        codes = self.encode_reference(ref.ref_audio_path)
+        # encode_reference is `list | None` in the Protocol because preset-voice
+        # backends return None; NeuTTS's implementation always returns the codes
+        # (or raises). Narrow for the type checker.
+        assert codes is not None, "NeuTTS.encode_reference returned None unexpectedly"
+        return codes, ref.ref_text
 
 
 # Auto-register at import time.

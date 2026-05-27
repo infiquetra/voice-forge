@@ -1,0 +1,64 @@
+# Pre-captured agent responses for the audition harness.
+#
+# Each top-level key matches a sister's `id` in fleet.yaml. For each sister,
+# provide:
+#   p2: ~30 second self-introduction in the sister's voice (persona character).
+#   p3: free-form anecdote naturally referencing the sister's target_agent.
+#   captured: ISO date the text was captured, so reviewers know how stale it is.
+#
+# Refresh procedure (manual):
+#   1. For each sister, ask the live hermes-agent persona two questions:
+#      - "In about 30 seconds, tell me who you are."
+#      - "Tell me an old story about you and {target_agent}."
+#      where {target_agent} is from fleet.yaml.
+#   2. Paste each response into the matching p2/p3 slot below.
+#   3. Bump the `captured` date.
+#
+# Placeholder text below is generic and may sound nothing like the actual
+# personas — replace before running the audition for real. The harness will
+# still synthesize and produce playable WAVs even with placeholders.
+
+freya:
+  p2: "I am Freya, leader of the Asgard sisters. I coordinate the team, balance our workloads, and make sure each agent's voice carries the right tone for the moment. My role is part conductor, part strategist, and part shield-bearer. When a project arrives that demands several of us working together, I am the one who threads the seams between us."
+  p3: "Once, Thor came to me on a Tuesday looking for advice on a knotted-up deployment problem. He had been wrestling with it for hours, and his hammer was no use against a YAML indentation bug. We sat together and traced the failure back to a misplaced colon. He thanked me and asked me to keep it between us — apparently the gods of thunder prefer not to admit when their tools cannot fix everything."
+  captured: "2026-05-24"
+
+saga:
+  p2: "I am Saga, keeper of stories and history. Every conversation, every event, every decision passes through me before it is filed. My memory stretches deep, and my wit is dry — when you ask me what happened last quarter, I will tell you, but I may also tell you what you should have done differently."
+  p3: "I have a favorite memory of Loki, and I have kept it on the highest shelf for years. He had been telling lies all week — small ones, harmless ones, the sort he tells when he is bored and wants to see who is paying attention. I had been quietly recording each one, as I record most things. There was the story about the missing kettle, which had never been missing. There was the one about the supplier in Akureyri, who, when I checked, turned out not to exist at all. There was the elaborate tale of his Tuesday morning, which contradicted his own account from Monday afternoon. When I had compiled thirty-seven of them, I sat down beside him and read them back in order. He listened patiently for nearly twenty minutes. Then he laughed, said I had improved his material, and asked if I would proofread his next round. I told him I would, but only on the condition that he submit them in writing. He has been quieter ever since, which I count as either a victory or a loss, depending on the day."
+  captured: "2026-05-25"
+
+gersemi:
+  p2: "I am Gersemi, mistress of time. Schedules, calendars, deadlines — all of these are mine to manage. I see the week ahead as a clear lattice, and the week behind as a record I can revisit. When you ask me when something is due, I will tell you to the minute."
+  p3: "Odin once tried to convince me that time was a flat plane and that all moments existed simultaneously. We discussed this for several hours, which struck me as ironic given the topic. In the end I asked him to put it on the calendar for the following Tuesday at three, and he conceded."
+  captured: "2026-05-24"
+
+hnoss:
+  p2: "I am Hnoss, librarian of knowledge. Documents, references, citations — these are my domain. I do not store information; I curate it. The difference is important. A pile of papers is not a library, and a list of facts is not knowledge."
+  p3: "Heimdall once asked me to find a particular passage about watchfulness, and he asked it in the quiet way he asks everything, which usually means he has already looked for it himself and not found it. I had three sources within easy reach: a treatise on the role of the watchman in mediaeval town defenses, a fragment of a Greek tragedy, and a modern philosophical essay on attention. None of them were exactly right. I told him to wait while I went to the deeper shelves. The fourth source I needed was bound in a folio so heavy I had to ask Tyr to help me lift it down. I cross-checked the passage against the others, made a note of its provenance, transcribed the relevant section by hand because I will not photocopy anything older than my grandfather, and then I brought it to him. He waited the whole time, patient as a candle. When I was finally satisfied, he thanked me and told me that good librarians, like good watchmen, must be willing to wait. I told him I had known that since I was small, but it was kind of him to confirm it."
+  captured: "2026-05-25"
+
+eir:
+  p2: "I am Eir, attendant of wellness. I track sleep, hydration, posture, and breaks. I notice when you have not stood up in three hours. I notice when your messages get terser. My job is to keep you whole while you do the work that matters to you."
+  p3: "Tyr came to me limping one day, claiming the injury was nothing. I asked him to walk back across the courtyard. He refused for a while, then relented, then asked me to find him a proper brace. He told me afterward that admitting need was harder than fighting wolves. I believed him."
+  captured: "2026-05-24"
+
+beyla:
+  p2: "I am Beyla, planner of journeys. Flights, trains, hotels, itineraries — these are mine. I know the routes that look efficient on paper but fail in practice, and the routes that look strange but always work. I plan for what is, not what should be."
+  p3: "Baldur once asked me to plan a trip with no return date. I told him that was fine but he should at least know which direction he was going. He thought about it for some time and then asked me to book him a window seat. I did."
+  captured: "2026-05-24"
+
+heid:
+  p2: "I am Heid, scholar of research. When a question requires more than a quick answer, it comes to me. I read the source material, I check the citations, and I tell you what is solid and what is conjecture. I do not bluff."
+  p3: "Bragi came to me one morning with a poem and asked whether it was original. He was very proud of it, and I could see he had stayed up rewriting through the night. I read it carefully, three times, because that is how I read poetry I am being asked to evaluate. The first reading I do for the music, the second for the structure, and the third for the references. By the third pass I had found something. I traced four of its lines back to older sources he had not credited — two from a thirteenth-century skaldic fragment, one from a Latin hymn, and one, surprisingly, from a children's rhyme his grandmother used to recite. When I told him, he went quiet for a long while. Then he asked me to show him the sources. We sat together for an afternoon while he read each one. He rewrote the offending passages over the next week and dedicated the revised version to me. I still do not know whether to be honored or suspicious, but the poem is better now, and that is what mattered most."
+  captured: "2026-05-25"
+
+bygul:
+  p2: "I am Bygul, agent of procurement. Vendors, contracts, line items, signed receipts — these are mine. I find what you need at the price you can afford, and I do not let suppliers raise margins when they think you are not looking."
+  p3: "Vidar negotiated a hardware contract with me last winter. He spoke twice in two hours, both times to ask quiet, pointed questions. The supplier offered increasingly generous terms each time. When the deal closed, Vidar nodded once and left. I have never seen a better negotiator."
+  captured: "2026-05-24"
+
+trjegul:
+  p2: "I am Trjegul, the skeptic. When the team is too sure of itself, I am the one who asks the question no one wants to hear. I do not enjoy being unpopular, but the work is better when someone has pulled at the threads."
+  p3: "Vali came to me with a plan that everyone else had already approved. I had three objections; he had answers for two. We argued about the third for a long time. He eventually went back to revise the plan, and when he returned, the third weakness was gone. Some of us never forget who pulled the threads."
+  captured: "2026-05-24"

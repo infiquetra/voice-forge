@@ -1,0 +1,82 @@
+name: Publish to PyPI
+
+# Tag-triggered publish to PyPI (or TestPyPI for *-rc.* tags).
+# Uses OIDC trusted publishing — NO PYPI TOKEN STORED. Configure a
+# Pending Publisher on pypi.org for the `voice-forge-tts` project name
+# BEFORE the first tag push; see docs/RELEASING.md for the one-time setup.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    name: Build wheel + sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: python -m pip install --upgrade build
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-testpypi:
+    # Pre-release tags (v*-rc.*, v*-alpha.*, v*-beta.*) route to TestPyPI for dry runs.
+    name: Publish to TestPyPI (pre-release tags only)
+    needs: build
+    runs-on: ubuntu-latest
+    if: contains(github.ref_name, '-rc.') || contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.')
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/voice-forge-tts/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+
+  publish-pypi:
+    # Final release tags (v*.*.*, no pre-release suffix) go to production PyPI.
+    name: Publish to PyPI (release tags only)
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '-rc.') && !contains(github.ref_name, '-alpha.') && !contains(github.ref_name, '-beta.') }}
+    environment:
+      name: pypi
+      url: https://pypi.org/project/voice-forge-tts/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

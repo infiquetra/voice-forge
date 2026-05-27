@@ -195,9 +195,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore
 #   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#   and can be added to the global gitignore or merged into this file. However, if you prefer,
 #   you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 # Temporary file for partial code execution
@@ -216,3 +216,27 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.audition-registry/
+
+# voice-forge encrypted credential store. The file itself is encrypted
+# (AES-256-CTR + HMAC-SHA256 via Ansible Vault 1.1 format) so it's safe
+# to commit if you trust your vault password, but the default posture is
+# don't-commit-by-accident. Remove these lines if you want to sync the
+# vault across machines via git. See src/voice_forge/secrets/README.md.
+#
+# Leading slash anchors to repo root — otherwise the pattern would also
+# match src/voice_forge/secrets/ (the *module*, which we DO want tracked).
+/secrets/
+.voice-forge/
+
+# macOS Finder metadata
+.DS_Store
+
+# Claude Code per-machine state. Worktrees, jobs, context snapshots, and
+# checkpoints are local-only. Plans under .claude/plans/ ARE useful repo
+# history (they document why we did what we did) so they stay tracked
+# via the negation pattern below.
+.claude/worktrees/
+.claude/context/
+.claude/checkpoints/
+.claude/jobs/

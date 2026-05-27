@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 import time
 import wave
 from pathlib import Path
@@ -21,14 +22,31 @@ from pathlib import Path
 import click
 import numpy as np
 
+from . import __version__
+from .backends import known_backends, load_backend_module
 
-def _import_backend(backend_name: str):
-    """Import a backend module to trigger its register_backend() call."""
-    if backend_name == "neutts":
-        from .backends import neutts  # noqa: F401 — triggers register
-    # Add other backend imports here as they ship
-    else:
-        click.echo(f"Unknown backend: {backend_name}", err=True)
+
+def _load_backend_or_exit(backend_name: str) -> None:
+    """Import the named backend module; sys.exit(2) with a friendly message on failure.
+
+    Used by CLI commands that absolutely need the backend (synth). The `health`
+    command catches the underlying KeyError/ImportError directly so it can keep
+    reporting state even when a backend isn't installed.
+    """
+    try:
+        load_backend_module(backend_name)
+    except KeyError:
+        click.echo(
+            f"error: unknown backend {backend_name!r}; known: {known_backends()}",
+            err=True,
+        )
+        sys.exit(2)
+    except ImportError as exc:
+        click.echo(
+            f"error: backend {backend_name!r} known but not installed; "
+            f"install with `pip install voice-forge-tts[{backend_name}]` ({exc})",
+            err=True,
+        )
         sys.exit(2)
 
 
@@ -53,7 +71,7 @@ def _resolve_text_arg(text_arg: str) -> str:
 
 
 @click.group()
-@click.version_option(version="0.1.0.dev0", prog_name="voice-forge")
+@click.version_option(version=__version__, prog_name="voice-forge")
 def main() -> None:
     """voice-forge — pluggable TTS service for agent voices."""
 
@@ -111,7 +129,7 @@ def synth(voice_id: str, text: str, out_path: str | None) -> None:
         )
         sys.exit(1)
 
-    _import_backend(ref.backend)
+    _load_backend_or_exit(ref.backend)
     from .backends import get_backend
 
     backend_cls = get_backend(ref.backend)
@@ -122,7 +140,9 @@ def synth(voice_id: str, text: str, out_path: str | None) -> None:
     click.echo(f"  loaded in {time.time() - t_load:.2f}s", err=True)
 
     if out_path is None:
-        out_path = f"/tmp/voice_forge_{voice_id}_{int(time.time())}.wav"
+        out_path = str(
+            Path(tempfile.gettempdir()) / f"voice_forge_{voice_id}_{int(time.time())}.wav"
+        )
     out = Path(out_path).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -175,36 +195,128 @@ def voice() -> None:
     """Voice management subcommands (add, delete, from-elevenlabs)."""
 
 
+def _parse_sampling_value(s: str) -> int | float | str | bool:
+    """Coerce a CLI string value to its narrowest numeric type, fallback string.
+
+    Examples:
+        "42"   → 42  (int)
+        "1.5"  → 1.5 (float)
+        "true" → True (bool)
+        "none" → None
+        "af_bella" → "af_bella" (str)
+    """
+    low = s.strip().lower()
+    if low in ("true", "yes"):
+        return True
+    if low in ("false", "no"):
+        return False
+    if low in ("none", "null"):
+        return None  # type: ignore[return-value]
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    return s
+
+
+def _parse_sampling_kv(items: tuple[str, ...]) -> dict:
+    """Parse repeatable ``--sampling key=value`` flags into a dict."""
+    out: dict = {}
+    for item in items:
+        if "=" not in item:
+            raise click.BadParameter(
+                f"--sampling expects key=value, got: {item!r}",
+                param_hint="--sampling",
+            )
+        key, _, val = item.partition("=")
+        out[key.strip()] = _parse_sampling_value(val)
+    return out
+
+
 @voice.command("add")
 @click.argument("voice_id")
-@click.argument("ref_audio_path", type=click.Path(exists=True, dir_okay=False))
+@click.argument(
+    "ref_audio_path",
+    required=False,
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+)
 @click.option(
     "--ref-text", default=None, help="Matching transcript (will Whisper-transcribe if absent)"
 )
-@click.option("--backend", default="neutts", show_default=True)
+@click.option(
+    "--preset",
+    "preset_id",
+    default=None,
+    help="Preset voice name for backends that don't use ref audio (e.g. kokoro 'af_bella')",
+)
+@click.option(
+    "--backend",
+    default=lambda: __import__(
+        "voice_forge.config", fromlist=["get_default_backend"]
+    ).get_default_backend(),
+    show_default="(configurable; see config.json or PUT /v1/backends/default)",
+)
 @click.option("--language", default="en", show_default=True)
 @click.option("--description", default="")
+@click.option(
+    "--sampling",
+    "sampling_overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help=(
+        "Per-voice sampling override; repeat for multiple keys. Examples: "
+        "--sampling speed=1.1 --sampling seed=42. Values are coerced "
+        "int/float/bool/None when possible; otherwise treated as strings. "
+        "See docs/BACKENDS.md for per-backend tunables."
+    ),
+)
 @click.option("--overwrite", is_flag=True, help="Replace existing voice with same id")
 def voice_add(
     voice_id: str,
-    ref_audio_path: str,
+    ref_audio_path: str | None,
     ref_text: str | None,
+    preset_id: str | None,
     backend: str,
     language: str,
     description: str,
+    sampling_overrides: tuple[str, ...],
     overwrite: bool,
 ) -> None:
-    """Add a voice from a local WAV file."""
+    """Add a voice — from a ref WAV (cloning backends) OR a --preset name (preset backends)."""
     from .registry import Registry
 
-    if ref_text is None:
+    if not ref_audio_path and not preset_id:
+        click.echo(
+            "error: provide either REF_AUDIO_PATH (for cloning backends like neutts) "
+            "or --preset <name> (for preset backends like kokoro).",
+            err=True,
+        )
+        sys.exit(2)
+    if ref_audio_path and preset_id:
+        click.echo(
+            "error: REF_AUDIO_PATH and --preset are mutually exclusive — pick one.",
+            err=True,
+        )
+        sys.exit(2)
+
+    metadata: dict = {"language": language, "description": description}
+    if preset_id:
+        metadata["preset_id"] = preset_id
+    if sampling_overrides:
+        metadata["sampling"] = _parse_sampling_kv(sampling_overrides)
+
+    if ref_audio_path and ref_text is None:
         click.echo("Whisper-transcribing ref audio (forced language=en)...", err=True)
         from .voice_lab.whisper import transcribe
 
         ref_text = transcribe(ref_audio_path, language=language)
         click.echo(f"  transcript: {ref_text!r}", err=True)
 
-    metadata = {"language": language, "description": description}
     registry = Registry()
     try:
         ref = registry.register(
@@ -218,14 +330,81 @@ def voice_add(
     except FileExistsError as exc:
         click.echo(f"error: {exc}. Re-run with --overwrite to replace.", err=True)
         sys.exit(1)
-    click.echo(f"registered {ref.voice_id} (backend={ref.backend})")
+    suffix_bits = []
+    if preset_id:
+        suffix_bits.append(f"preset={preset_id!r}")
+    if sampling_overrides:
+        suffix_bits.append(f"sampling={metadata['sampling']!r}")
+    suffix = " " + " ".join(suffix_bits) if suffix_bits else ""
+    click.echo(f"registered {ref.voice_id} (backend={ref.backend}){suffix}")
+
+
+@voice.command("tune")
+@click.argument("voice_id")
+@click.option(
+    "--sampling",
+    "sampling_overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help=(
+        "Sampling-param override; repeat for multiple keys. Existing keys are "
+        "preserved unless explicitly overwritten here."
+    ),
+)
+@click.option(
+    "--clear-sampling",
+    is_flag=True,
+    help="Remove the entire sampling block (resets to backend defaults).",
+)
+def voice_tune(
+    voice_id: str,
+    sampling_overrides: tuple[str, ...],
+    clear_sampling: bool,
+) -> None:
+    """Adjust the per-voice sampling params on an already-registered voice.
+
+    Examples:
+        voice-forge voice tune saga-comms-f5 --sampling cfg_strength=2.5 --sampling seed=42
+        voice-forge voice tune heid-research-dia --sampling max_new_tokens=8192
+        voice-forge voice tune saga-comms-f5 --clear-sampling
+    """
+    from .registry import Registry
+
+    if not sampling_overrides and not clear_sampling:
+        click.echo(
+            "error: pass at least one --sampling key=value (or --clear-sampling to reset).",
+            err=True,
+        )
+        sys.exit(2)
+    if sampling_overrides and clear_sampling:
+        click.echo(
+            "error: --sampling and --clear-sampling are mutually exclusive.",
+            err=True,
+        )
+        sys.exit(2)
+
+    overrides = _parse_sampling_kv(sampling_overrides) if sampling_overrides else None
+    registry = Registry()
+    try:
+        ref = registry.tune(voice_id, sampling_overrides=overrides, clear=clear_sampling)
+    except KeyError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(1)
+    new_sampling = ref.metadata.get("sampling") or "(cleared)"
+    click.echo(f"tuned {voice_id} sampling={new_sampling!r}")
 
 
 @voice.command("from-elevenlabs")
 @click.argument("voice_id")
 @click.option("--elevenlabs-voice-id", required=True, help="Source voice in ElevenLabs")
 @click.option("--api-key", default=None, help="ElevenLabs API key (or set ELEVENLABS_API_KEY env)")
-@click.option("--backend", default="neutts", show_default=True)
+@click.option(
+    "--backend",
+    default=lambda: __import__(
+        "voice_forge.config", fromlist=["get_default_backend"]
+    ).get_default_backend(),
+    show_default="(configurable; see config.json or PUT /v1/backends/default)",
+)
 @click.option("--max-seconds", default=14.0, type=float, show_default=True)
 @click.option("--no-trim", is_flag=True, help="Skip sentence-boundary trim; use full preview")
 @click.option("--language", default="en", show_default=True)
@@ -332,20 +511,171 @@ def health() -> None:
     from .backends import available_backends
     from .registry import Registry
 
-    # Trigger backend module imports so they self-register
-    try:
-        _import_backend("neutts")
-    except SystemExit:
-        pass  # Backend missing is fine for a health check
+    # Trigger backend module imports so they self-register. Missing-backend
+    # is fine for a health check — we still want to report what IS available.
+    for backend_name in known_backends():
+        try:
+            load_backend_module(backend_name)
+        except (KeyError, ImportError):
+            pass
 
     registry = Registry()
     info = {
-        "version": "0.1.0.dev0",
+        "version": __version__,
         "registry_dir": str(registry.root),
         "voices_count": len(registry.list()),
         "backends_available": available_backends(),
     }
     click.echo(json.dumps(info, indent=2))
+
+
+# ----- backend (subprocess-isolated provisioning) -----
+
+
+@main.group("backend")
+def backend_group() -> None:
+    """Provision subprocess-isolated backends (Piper / Chatterbox / MeloTTS)."""
+
+
+@backend_group.command("install")
+@click.argument("name")
+@click.option(
+    "--backends-root",
+    type=click.Path(),
+    default=None,
+    help="Where to put the per-backend venv (default: ~/.voice-forge/backends).",
+)
+def backend_install(name: str, backends_root: str | None) -> None:
+    """Create the per-backend venv + install the right pip extras.
+
+    Run once per host before using a subprocess-isolated backend:
+
+      voice-forge backend install piper
+      voice-forge backend install chatterbox
+      voice-forge backend install melotts
+
+    Installs ``voice-forge-tts[<name>,subprocess-shim]`` into a dedicated
+    venv at ``~/.voice-forge/backends/<name>/.venv/`` and writes a
+    state.json with the shim entry-point. The main voice-forge process
+    only spawns + talks HTTP to the child; never imports the backend's
+    deps.
+    """
+    import shutil as _shutil
+    import subprocess as _subprocess  # noqa: PLC0415 — CLI-only
+
+    from .backends._subprocess import DEFAULT_BACKEND_ROOT
+
+    root = Path(backends_root).expanduser() if backends_root else DEFAULT_BACKEND_ROOT
+    backend_dir = root / name
+    venv_dir = backend_dir / ".venv"
+    state_path = backend_dir / "state.json"
+
+    uv = _shutil.which("uv")
+    if uv is None:
+        raise click.ClickException("uv not found on PATH. Install uv: https://docs.astral.sh/uv/")
+
+    click.echo(f"[{name}] creating venv at {venv_dir} ...")
+    backend_dir.mkdir(parents=True, exist_ok=True)
+    _subprocess.run([uv, "venv", str(venv_dir)], check=True)  # noqa: S603 — uv path validated above
+
+    extras_spec = f"voice-forge-tts[{name},subprocess-shim]"
+    click.echo(f"[{name}] installing {extras_spec} into venv ...")
+    _subprocess.run(  # noqa: S603 — uv path validated above
+        [
+            uv,
+            "pip",
+            "install",
+            "--python",
+            str(venv_dir / "bin" / "python"),
+            "-e",
+            f".[{name},subprocess-shim]",
+        ],
+        check=True,
+    )
+
+    # Some backends need a post-install fixup step (e.g. the higgs backend
+    # has to patch around an upstream packaging defect that drops one of
+    # its subpackages). Backend modules declare this by exposing a
+    # `POST_INSTALL` callable in `voice_forge.backends._<name>_post_install`.
+    # We keep the lookup data-driven so a backend can opt in without us
+    # threading a new CLI flag through every call site.
+    _BACKEND_POST_INSTALL = {
+        "higgs": ("voice_forge.backends._higgs_post_install", "run"),
+    }
+    if name in _BACKEND_POST_INSTALL:
+        mod_name, func_name = _BACKEND_POST_INSTALL[name]
+        click.echo(f"[{name}] running post-install patcher ({mod_name}.{func_name}) ...")
+        # Run the patcher in the PARENT interpreter — it operates on the
+        # CHILD venv's site-packages from the outside (git clone + cp). The
+        # patcher itself does NOT need any per-backend dep, so importing
+        # it here in the parent is safe.
+        from importlib import import_module  # noqa: PLC0415
+
+        patcher_mod = import_module(mod_name)
+        getattr(patcher_mod, func_name)(venv_dir)
+
+    state = {
+        "name": name,
+        "shim_entry": "voice-forge-backend-shim",
+        "venv_path": str(venv_dir),
+        "voice_forge_version": __version__,
+    }
+    state_path.write_text(json.dumps(state, indent=2))
+    click.echo(f"[{name}] provisioned. state at {state_path}")
+
+
+@backend_group.command("uninstall")
+@click.argument("name")
+@click.option(
+    "--backends-root",
+    type=click.Path(),
+    default=None,
+    help="Per-backend venv root (default: ~/.voice-forge/backends).",
+)
+def backend_uninstall(name: str, backends_root: str | None) -> None:
+    """Remove a subprocess backend's venv + state."""
+    import shutil as _shutil  # noqa: PLC0415
+
+    from .backends._subprocess import DEFAULT_BACKEND_ROOT
+
+    root = Path(backends_root).expanduser() if backends_root else DEFAULT_BACKEND_ROOT
+    backend_dir = root / name
+    if not backend_dir.exists():
+        click.echo(f"backend {name!r} not installed at {backend_dir} — nothing to remove")
+        return
+    _shutil.rmtree(backend_dir)
+    click.echo(f"removed {backend_dir}")
+
+
+@backend_group.command("list")
+@click.option(
+    "--backends-root",
+    type=click.Path(),
+    default=None,
+    help="Per-backend venv root (default: ~/.voice-forge/backends).",
+)
+def backend_list(backends_root: str | None) -> None:
+    """List provisioned subprocess backends."""
+    from .backends._subprocess import DEFAULT_BACKEND_ROOT
+
+    root = Path(backends_root).expanduser() if backends_root else DEFAULT_BACKEND_ROOT
+    if not root.is_dir():
+        click.echo(f"(no backends provisioned at {root})")
+        return
+    rows = []
+    for entry in sorted(root.iterdir()):
+        state_path = entry / "state.json"
+        if state_path.is_file():
+            try:
+                state = json.loads(state_path.read_text())
+                rows.append((entry.name, state))
+            except json.JSONDecodeError:
+                rows.append((entry.name, {"error": "corrupted state.json"}))
+    if not rows:
+        click.echo(f"(no provisioned backends in {root})")
+        return
+    for name, state in rows:
+        click.echo(f"  {name:15s} version={state.get('voice_forge_version', '?')}")
 
 
 if __name__ == "__main__":
