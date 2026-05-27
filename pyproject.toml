@@ -175,6 +175,34 @@ higgs = [
     # higgs venv stays self-contained.
     "omegaconf>=2.3",
 ]
+higgs-mlx = [
+    # Higgs Audio V2 - MLX port. Sibling extra to `higgs`; this one is
+    # Apple-Silicon-only. Same model, dramatically faster on M-series
+    # hardware (~0.33x RTF at q6 on M5 Max per the model card; the
+    # transformers `higgs` extra runs ~2.45-3x slower than realtime on
+    # M2 Ultra MPS).
+    #
+    # Source pin: branch `higgs-overlap-add-streaming` on the
+    # `kaioct-labs/mlx-audio` fork. The MLX port is pending merge into
+    # `Blaizzy/mlx-audio` upstream; the fork's branch is the source of
+    # record for `HiggsAudioServer` until upstream merges. Once merged,
+    # switch this to `mlx-audio>=<version-with-higgs-merged>` from PyPI.
+    #
+    # No transformers/torch pin needed here - mlx-audio already pulls
+    # the transformers version it needs (>=5.5.0), and torch is NOT a
+    # dep of mlx-audio (it's a pure-MLX runtime).
+    #
+    # Unlike the transformers `higgs` extra, the MLX fork ships a clean
+    # setuptools package with explicit `find_packages(include=['mlx_audio',
+    # 'mlx_audio.*'])` so all subpackages land in site-packages - no
+    # post-install hook required (compare _higgs_post_install.py which
+    # patches around boson_multimodal's missing __init__.py files).
+    "mlx-audio @ git+https://github.com/kaioct-labs/mlx-audio.git@higgs-overlap-add-streaming",
+    "huggingface-hub>=0.24",
+    "soundfile>=0.12",
+    "scipy>=1.10",
+    "numpy>=1.26",
+]
 subprocess-shim = [
     # Lightweight HTTP shim used inside per-backend venvs. The parent already
     # has fastapi + uvicorn from base deps; this extra exists so backend venvs

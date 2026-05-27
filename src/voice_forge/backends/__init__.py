@@ -154,6 +154,13 @@ _BACKEND_MODULES: dict[str, str] = {
     # male Nordic English no matter what you feed it".
     "orpheus": "voice_forge.backends.orpheus",
     "higgs": "voice_forge.backends.higgs",
+    # MLX-port sibling of `higgs`. Apple-Silicon-only; ~10x faster on M2
+    # Ultra than the transformers-based `higgs` (which uses MPS via
+    # PyTorch and runs ~2.45-3x slower than realtime). Pulls the
+    # `mlx_audio.tts.models.higgs_audio.HiggsAudioServer` API from the
+    # `kaioct-labs/mlx-audio` fork's `higgs-overlap-add-streaming` branch
+    # (pending upstream merge to Blaizzy/mlx-audio).
+    "higgs-mlx": "voice_forge.backends.higgs_mlx",
 }
 
 
