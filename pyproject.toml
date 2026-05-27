@@ -104,6 +104,77 @@ melotts = [
     # Install from the upstream git repo until a fixed release lands:
     "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",
 ]
+orpheus = [
+    # Orpheus TTS — Apache-2.0 Llama-3 3B-backbone autoregressive TTS from
+    # Canopy Labs. Subprocess-isolated because the model has its own pinned
+    # transformers/torch trio + the SNAC neural-codec dep stack.
+    #
+    # We deliberately do NOT pull `orpheus-speech` (the official PyPI
+    # wrapper). It depends on `vllm`, which is CUDA-only and cannot
+    # install on Apple Silicon — the entire reason this backend exists is
+    # to run on the M2 Ultra dev host. Instead, we drive raw
+    # `transformers` + `snac` directly in the child venv:
+    #
+    #   * `transformers` loads the Llama-3 3B audio-extended checkpoint
+    #     and runs `model.generate()` on torch's MPS / CUDA / CPU device.
+    #   * `snac` (Multi-Scale Neural Audio Codec, hubertsiuzdak/snac_24khz)
+    #     encodes the reference WAV → 3 codebook streams for in-context
+    #     priming and decodes the model's emitted audio tokens → 24 kHz
+    #     mono PCM.
+    #   * `librosa` is the resampler when refs arrive at 44.1 / 48 kHz.
+    #   * `soundfile` reads the reference WAV (matches the parent's audio
+    #     loader; redeclared here so the child venv is self-contained).
+    #
+    # See backends/orpheus.py for why we added this (F5 doesn't preserve
+    # heavy non-default accents).
+    "transformers>=4.46,<5",
+    "torch>=2.3",
+    "snac>=1.2.1",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "accelerate>=0.30",
+]
+higgs = [
+    # Higgs Audio V2 — Boson AI's multimodal audio foundation model. Open
+    # weights, ~3B params. Subprocess-isolated like every LLM-backbone
+    # backend so its transformers+torch pins stay out of the main venv.
+    #
+    # IMPORTANT: the upstream `boson_multimodal` wheel built via setuptools
+    # default `find_packages` SILENTLY DROPS two subdirectories that lack
+    # `__init__.py` markers: `serve/` and `audio_processing/`. The audio
+    # tokenizer (required for voice cloning) lives in the latter, so a
+    # post-install hook (`_higgs_post_install.py`) clones the upstream repo
+    # and copies the missing tree into the venv's site-packages. See
+    # `backends/higgs.py` and `cli.py:backend_install`'s POST_INSTALL_HOOK
+    # invocation for the wiring. Upstream issue not filed yet (2026-05-26).
+    #
+    # transformers pin matches upstream's requirements.txt range to avoid
+    # picking up an incompatible major release once they ship 4.47+.
+    "boson-multimodal @ git+https://github.com/boson-ai/higgs-audio.git",
+    "transformers>=4.45.1,<4.47",
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "huggingface-hub>=0.24",
+    "accelerate>=0.26",
+    "vector-quantize-pytorch>=1.14",
+    "descript-audio-codec>=1.0",
+    "dacite>=1.8",
+    "loguru>=0.7",
+    "tqdm>=4.66",
+    "pandas>=2.0",
+    "click>=8.1",
+    "jieba>=0.42",
+    "langid>=1.1",
+    # omegaconf is a transitive dep of the post-install-patched
+    # audio_processing/quantization/ddp_utils.py — upstream doesn't list it
+    # in their pyproject because their installable wheel doesn't ship that
+    # subtree (the very defect we patch around). Declared explicitly so the
+    # higgs venv stays self-contained.
+    "omegaconf>=2.3",
+]
 subprocess-shim = [
     # Lightweight HTTP shim used inside per-backend venvs. The parent already
     # has fastapi + uvicorn from base deps; this extra exists so backend venvs

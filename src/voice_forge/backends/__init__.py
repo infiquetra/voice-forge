@@ -146,6 +146,14 @@ _BACKEND_MODULES: dict[str, str] = {
     "piper": "voice_forge.backends.piper",
     "chatterbox": "voice_forge.backends.chatterbox",
     "melotts": "voice_forge.backends.melotts",
+    # LLM-backbone cloning models — added 2026-05-26 after exhaustive
+    # testing showed F5/diffusion strips heavy non-default accents
+    # regardless of knob tuning. Llama-backed (orpheus) and multimodal-
+    # foundation (higgs) architectures can in-context-learn voice
+    # characteristics including accent. See LEARNINGS § "F5 can't do
+    # male Nordic English no matter what you feed it".
+    "orpheus": "voice_forge.backends.orpheus",
+    "higgs": "voice_forge.backends.higgs",
 }
 
 

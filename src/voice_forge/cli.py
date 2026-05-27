@@ -593,6 +593,27 @@ def backend_install(name: str, backends_root: str | None) -> None:
         check=True,
     )
 
+    # Some backends need a post-install fixup step (e.g. the higgs backend
+    # has to patch around an upstream packaging defect that drops one of
+    # its subpackages). Backend modules declare this by exposing a
+    # `POST_INSTALL` callable in `voice_forge.backends._<name>_post_install`.
+    # We keep the lookup data-driven so a backend can opt in without us
+    # threading a new CLI flag through every call site.
+    _BACKEND_POST_INSTALL = {
+        "higgs": ("voice_forge.backends._higgs_post_install", "run"),
+    }
+    if name in _BACKEND_POST_INSTALL:
+        mod_name, func_name = _BACKEND_POST_INSTALL[name]
+        click.echo(f"[{name}] running post-install patcher ({mod_name}.{func_name}) ...")
+        # Run the patcher in the PARENT interpreter — it operates on the
+        # CHILD venv's site-packages from the outside (git clone + cp). The
+        # patcher itself does NOT need any per-backend dep, so importing
+        # it here in the parent is safe.
+        from importlib import import_module  # noqa: PLC0415
+
+        patcher_mod = import_module(mod_name)
+        getattr(patcher_mod, func_name)(venv_dir)
+
     state = {
         "name": name,
         "shim_entry": "voice-forge-backend-shim",
