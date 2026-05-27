@@ -147,6 +147,8 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
     # talk directly to HiggsAudioModel (no ServeEngine wrapper) because
     # the wheel doesn't ship `boson_multimodal.serve` — see this module's
     # top-level docstring for the full root-cause writeup.
+    import queue  # noqa: PLC0415
+    import threading  # noqa: PLC0415
     from dataclasses import asdict  # noqa: PLC0415
 
     import torch  # noqa: PLC0415
@@ -169,6 +171,72 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
     from boson_multimodal.model.higgs_audio.utils import revert_delay_pattern  # noqa: PLC0415
     from huggingface_hub import snapshot_download  # noqa: PLC0415
     from transformers import AutoConfig, AutoTokenizer  # noqa: PLC0415
+    from transformers.generation.streamers import BaseStreamer  # noqa: PLC0415
+
+    # ------------------------------------------------------------------
+    # Streaming knobs
+    # ------------------------------------------------------------------
+    # How many audio frames to buffer before yielding the first PCM chunk.
+    # Each frame is 1 / FRAME_RATE = 40 ms at the audio tokenizer's 25 Hz
+    # frame rate, so STREAM_FIRST_CHUNK_FRAMES=10 means we wait for ~0.4 s
+    # of audio tokens before we first decode + yield. On M2 Ultra MPS this
+    # gives a first-audio latency of ~2.5–3.5 s (model takes ~100 ms per
+    # token to generate at this seq_len, plus a one-shot CPU decode).
+    #
+    # Subsequent yields happen every STREAM_CHUNK_FRAMES frames thereafter.
+    # Larger chunks → fewer re-decodes (each re-decode is O(N_total_frames)
+    # because we decode the full accumulated token stream each time to
+    # avoid codec-edge artifacts), smaller chunks → finer-grained playback
+    # cadence at the cost of more total decode wall time.
+    #
+    # On M2 Ultra the per-token generation rate is ~0.4× realtime, so the
+    # stream falls behind playback if the consumer reads in realtime — but
+    # for hermes-agent's "start playing as soon as audio is available" use
+    # case the metric that matters is first-audio latency, not total
+    # throughput. See LEARNINGS file for the full perf investigation.
+    STREAM_FIRST_CHUNK_FRAMES = 10  # 0.4 s — minimise first-audio latency
+    STREAM_CHUNK_FRAMES = 25  # 1.0 s — balance overhead vs cadence
+    STREAM_FRAME_RATE = 25  # matches HiggsAudioTokenizer.frame_rate
+
+    class _SyncAudioStreamer(BaseStreamer):
+        """Sync-queue streamer that collects per-step audio token columns.
+
+        ``HiggsAudioModel.generate()`` calls ``put()`` once per generation
+        step. In audio-generation mode the value is shape
+        ``[audio_num_codebooks]`` (the codes for ONE frame). In text mode
+        the value is shape ``[1]`` (a single text token). We discriminate
+        by shape and enqueue only audio frames; text tokens are dropped
+        because we never need them on the streaming path.
+
+        The queue is a stdlib ``queue.Queue``; the generator thread blocks
+        on ``put()`` if the consumer is slow, and the consumer blocks on
+        ``get()`` if the generator is still running — natural backpressure.
+        """
+
+        def __init__(self, audio_num_codebooks: int) -> None:
+            self._audio_num_codebooks = audio_num_codebooks
+            self._queue: queue.Queue = queue.Queue()
+            self._STOP = object()
+
+        def put(self, value: torch.Tensor) -> None:  # noqa: F821
+            # `next_audio_tokens` arrives as a 1-D tensor of length
+            # num_codebooks. `next_tokens` (text) arrives as a 1-D tensor
+            # of length 1 (or batch). Use the shape to discriminate.
+            if value.shape[0] == self._audio_num_codebooks:
+                self._queue.put(value)
+            # else: text tokens, discard for the streaming path
+
+        def end(self) -> None:
+            self._queue.put(self._STOP)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            item = self._queue.get()
+            if item is self._STOP:
+                raise StopIteration
+            return item
 
     class _HiggsInProcess:
         """In-process implementation used inside the child venv.
@@ -349,28 +417,32 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
             )
             return [system_message, user_ref, assistant_ref], [ref_audio_tokens]
 
-        @torch.inference_mode()
-        def _generate_audio(
-            self,
-            text: str,
-            ref: VoiceRef,
-        ) -> np.ndarray:
-            """Core generation. Returns float32 PCM in [-1, 1] at 24 kHz."""
-            if self._model is None or self._audio_tokenizer is None:
-                raise RuntimeError("higgs not loaded")
-            assert self._tokenizer is not None  # nosec B101 — narrowing
-            assert self._config_obj is not None  # nosec B101 — narrowing
-            assert self._collator is not None  # nosec B101 — narrowing
+        # ------------------------------------------------------------------
+        # Generation helpers (shared by sync + streaming paths)
+        # ------------------------------------------------------------------
 
+        def _resolve_sampling(self, ref: VoiceRef) -> dict:
+            """Extract sampling knobs from the VoiceRef + tunable defaults."""
             sampling = ref.metadata.get("sampling") or {}
-            temperature = float(sampling.get("temperature", 0.3))
-            top_p = float(sampling.get("top_p", 0.95))
-            top_k = int(sampling.get("top_k", 50))
-            max_new_tokens = int(sampling.get("max_new_tokens", 2048))
             ras_win_len_raw = int(sampling.get("ras_win_len", 7))
-            ras_win_len = ras_win_len_raw if ras_win_len_raw > 0 else None
-            ras_win_max_num_repeat = int(sampling.get("ras_win_max_num_repeat", 2))
-            seed = int(sampling.get("seed", 123))
+            return {
+                "temperature": float(sampling.get("temperature", 0.3)),
+                "top_p": float(sampling.get("top_p", 0.95)),
+                "top_k": int(sampling.get("top_k", 50)),
+                "max_new_tokens": int(sampling.get("max_new_tokens", 2048)),
+                "ras_win_len": ras_win_len_raw if ras_win_len_raw > 0 else None,
+                "ras_win_max_num_repeat": int(sampling.get("ras_win_max_num_repeat", 2)),
+                "seed": int(sampling.get("seed", 123)),
+            }
+
+        def _build_batch(self, text: str, ref: VoiceRef) -> dict:
+            """Build the device-resident batch dict consumed by generate().
+
+            Hoisted out of ``_generate_audio`` so both the blocking and
+            streaming synthesise paths share the same ChatML construction.
+            """
+            assert self._tokenizer is not None  # nosec B101 — narrowing
+            assert self._collator is not None  # nosec B101 — narrowing
 
             priming, audio_ids = self._build_messages(ref)
             target_msg = Message(role="user", content=text)
@@ -402,61 +474,242 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
             for k, v in batch.items():
                 if isinstance(v, torch.Tensor):
                     batch[k] = v.contiguous().to(self._device)
+            return batch
+
+        def _decode_audio_tokens(self, audio_out_ids: torch.Tensor) -> np.ndarray:  # noqa: F821
+            """Decode a [num_codebooks, num_frames] tensor to float32 PCM.
+
+            Handles the standard upstream post-processing: optional
+            delay-pattern reversion, clip into the codebook range, and a
+            move to the audio tokenizer's device (CPU on MPS). The caller
+            is responsible for stripping BOS/EOS sentinels appropriately
+            for their use case — the non-streaming path strips both, the
+            streaming path strips BOS only at the start and EOS only at
+            the final flush.
+            """
+            assert self._audio_tokenizer is not None  # nosec B101 — narrowing
+            if audio_out_ids.shape[1] == 0:
+                return np.zeros(0, dtype=np.float32)
+            if audio_out_ids.device.type == "mps":
+                audio_out_ids = audio_out_ids.detach().cpu()
+            wave = self._audio_tokenizer.decode(audio_out_ids.unsqueeze(0))
+            return np.asarray(wave[0, 0], dtype=np.float32)
+
+        @torch.inference_mode()
+        def _generate_audio(
+            self,
+            text: str,
+            ref: VoiceRef,
+        ) -> np.ndarray:
+            """Core generation. Returns float32 PCM in [-1, 1] at 24 kHz."""
+            if self._model is None or self._audio_tokenizer is None:
+                raise RuntimeError("higgs not loaded")
+            assert self._config_obj is not None  # nosec B101 — narrowing
+
+            samp = self._resolve_sampling(ref)
+            batch = self._build_batch(text, ref)
 
             outputs = self._model.generate(
                 **batch,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=samp["max_new_tokens"],
                 use_cache=True,
                 do_sample=True,
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
+                temperature=samp["temperature"],
+                top_k=samp["top_k"],
+                top_p=samp["top_p"],
                 past_key_values_buckets=None,  # static KV cache off (MPS-incompatible)
-                ras_win_len=ras_win_len,
-                ras_win_max_num_repeat=ras_win_max_num_repeat,
+                ras_win_len=samp["ras_win_len"],
+                ras_win_max_num_repeat=samp["ras_win_max_num_repeat"],
                 stop_strings=["<|end_of_text|>", "<|eot_id|>"],
                 tokenizer=self._tokenizer,
-                seed=seed,
+                seed=samp["seed"],
             )
 
             # outputs[1] is the per-codebook audio token tensor list. Apply
             # the delay-pattern reversion when the model config requires it,
             # then clip to the codebook range, strip the BOS/EOS markers,
             # and decode through the audio tokenizer's VQ decoder.
+            codebook_size = int(self._audio_tokenizer.codebook_size)
             step_audio_out_ids = []
             for ele in outputs[1]:
                 ids = ele
                 if self._config_obj.use_delay_pattern:
                     ids = revert_delay_pattern(ids)
-                codebook_size = int(self._audio_tokenizer.codebook_size)
                 # The [:, 1:-1] strip removes the audio_stream_bos /
                 # audio_stream_eos sentinels — mirrors upstream exactly.
                 step_audio_out_ids.append(ids.clip(0, codebook_size - 1)[:, 1:-1])
             audio_out_ids = torch.concat(step_audio_out_ids, dim=1)
-
-            # The decoder runs on the audio tokenizer's device (CPU on MPS,
-            # same device as model on CUDA). Move tokens accordingly.
-            if audio_out_ids.device.type == "mps":
-                audio_out_ids_for_decode = audio_out_ids.detach().cpu()
-            else:
-                audio_out_ids_for_decode = audio_out_ids
-            wave = self._audio_tokenizer.decode(audio_out_ids_for_decode.unsqueeze(0))
-            # decode() returns numpy already; shape is (1, 1, num_samples).
-            # Squeeze the leading dims and cast.
-            return np.asarray(wave[0, 0], dtype=np.float32)
+            return self._decode_audio_tokens(audio_out_ids)
 
         def synthesize(self, text: str, ref: VoiceRef) -> np.ndarray:
             return self._generate_audio(text, ref)
 
         def synthesize_stream(self, text: str, ref: VoiceRef) -> Iterator[np.ndarray]:
-            """Single-batch fallback streaming.
+            """Stream PCM as the model produces audio tokens.
 
-            Higgs's true streaming hook (`AsyncHiggsAudioStreamer`) lives
-            in the unshipped ``boson_multimodal.serve`` subpackage. For
-            v1 we yield the full waveform as one chunk; voice-forge's
-            HTTP shim handles the chunking on the wire regardless.
+            Implementation
+            --------------
+
+            ``HiggsAudioModel.generate()`` accepts a ``streamer`` keyword
+            (the upstream pattern lifted from ``AsyncHiggsAudioStreamer``
+            in the unshipped ``boson_multimodal.serve.serve_engine`` —
+            we ported the queue protocol but use a stdlib threading
+            ``Queue`` instead of asyncio so it composes cleanly with the
+            ``Iterator[np.ndarray]`` Protocol the rest of voice-forge uses).
+            We run ``generate()`` in a worker thread and consume audio
+            token frames from the queue here, decoding + yielding PCM
+            chunks every ``STREAM_CHUNK_FRAMES`` frames.
+
+            Why decode the full accumulated tokens each yield?
+            --------------------------------------------------
+
+            The audio tokenizer's decoder is a stack of strided
+            convolutions (descript-audio-codec ``dac2.Decoder``) with
+            non-trivial receptive field. Decoding each new chunk in
+            isolation produces audible clicks at chunk boundaries.
+            Re-decoding the full token stream each yield and slicing out
+            only the new samples gives a click-free stream at the cost of
+            O(N²) total decode work — for typical conversational
+            sentences (<10 s of audio) this overhead is ~5–10 s wall time
+            and acceptable.
+
+            First-audio latency
+            -------------------
+
+            On M2 Ultra MPS we measured ~3 s from synth start to first
+            non-empty PCM yield (the model generates ~10 audio tokens in
+            ~2.5 s, plus ~50 ms for the first decode). After the first
+            chunk, per-chunk wall time is ~1.4 s per 0.4 s of audio —
+            the stream cannot keep up with realtime playback on this
+            hardware, but the first-audio drop is enough to feel
+            conversational at the sentence-pump granularity hermes-agent
+            uses. See the LEARNINGS journal entry from 2026-05-26 for
+            the full perf-investigation context.
             """
-            yield self._generate_audio(text, ref)
+            if self._model is None or self._audio_tokenizer is None:
+                raise RuntimeError("higgs not loaded")
+            assert self._config_obj is not None  # nosec B101 — narrowing
+            assert self._tokenizer is not None  # nosec B101 — narrowing
+
+            samp = self._resolve_sampling(ref)
+            batch = self._build_batch(text, ref)
+
+            audio_num_codebooks = int(self._config_obj.audio_num_codebooks)
+            streamer = _SyncAudioStreamer(audio_num_codebooks=audio_num_codebooks)
+            codebook_size = int(self._audio_tokenizer.codebook_size)
+            use_delay_pattern = bool(self._config_obj.use_delay_pattern)
+            # When the model uses delay-pattern coding the token buffer
+            # carries `num_codebooks - 1` extra leading "delay" columns
+            # that ``revert_delay_pattern`` consumes — they don't map to
+            # audible frames. The effective audio frame count for a
+            # buffer of length L is therefore L - delay_pad. Without
+            # delay pattern, all columns are real frames.
+            delay_pad = (audio_num_codebooks - 1) if use_delay_pattern else 0
+
+            # Worker thread runs generate() blocking; main thread consumes
+            # the streamer queue. inference_mode is set on the worker side
+            # because the model's forward + sample loops both need it.
+            generate_kwargs = dict(
+                **batch,
+                max_new_tokens=samp["max_new_tokens"],
+                use_cache=True,
+                do_sample=True,
+                temperature=samp["temperature"],
+                top_k=samp["top_k"],
+                top_p=samp["top_p"],
+                past_key_values_buckets=None,
+                ras_win_len=samp["ras_win_len"],
+                ras_win_max_num_repeat=samp["ras_win_max_num_repeat"],
+                stop_strings=["<|end_of_text|>", "<|eot_id|>"],
+                tokenizer=self._tokenizer,
+                seed=samp["seed"],
+                streamer=streamer,
+            )
+
+            # Capture exceptions from the worker so we can re-raise on
+            # the main thread; otherwise a generation crash would just
+            # silently end the iterator.
+            worker_exc: list[BaseException] = []
+
+            def _worker() -> None:
+                try:
+                    with torch.inference_mode():
+                        self._model.generate(**generate_kwargs)
+                except BaseException as e:  # noqa: BLE001 — re-raised below
+                    worker_exc.append(e)
+                    streamer.end()  # unblock the consumer
+
+            thread = threading.Thread(target=_worker, daemon=True)
+            thread.start()
+
+            try:
+                cols: list[torch.Tensor] = []  # noqa: F821 — torch.Tensor
+                yielded_samples = 0
+                first_chunk_done = False
+
+                def _decode_accumulated(strip_eos: bool) -> np.ndarray:
+                    """Decode the full token buffer to PCM with proper sentinel stripping.
+
+                    Always strips the leading BOS sentinel (frame 0).
+                    Strips the trailing EOS sentinel iff ``strip_eos`` —
+                    only true on the final flush after the generator
+                    thread signalled end-of-stream.
+                    """
+                    if not cols:
+                        return np.zeros(0, dtype=np.float32)
+                    ids = torch.stack(cols, dim=1)
+                    if use_delay_pattern:
+                        ids = revert_delay_pattern(ids)
+                    ids = ids.clip(0, codebook_size - 1)
+                    end = ids.shape[1] - 1 if strip_eos else ids.shape[1]
+                    ids = ids[:, 1:end]  # strip BOS always, EOS conditionally
+                    return self._decode_audio_tokens(ids)
+
+                while True:
+                    try:
+                        item = next(streamer)
+                    except StopIteration:
+                        break
+                    cols.append(item)
+
+                    # Effective audible frames available so far:
+                    #   len(cols) - delay_pad   (delay-pattern padding)
+                    #                  - 1      (audio_stream_bos sentinel)
+                    # Once divided into how many we've already shipped
+                    # (yielded_samples / 960), the remainder is the new
+                    # frames waiting to be yielded.
+                    samples_per_frame = SAMPLE_RATE // STREAM_FRAME_RATE
+                    usable_frames = max(0, len(cols) - delay_pad - 1)
+                    yielded_frames = yielded_samples // samples_per_frame
+                    threshold = (
+                        STREAM_FIRST_CHUNK_FRAMES if not first_chunk_done
+                        else STREAM_CHUNK_FRAMES
+                    )
+                    if usable_frames - yielded_frames < threshold:
+                        continue
+
+                    # Decode without EOS strip (we haven't seen EOS yet).
+                    pcm = _decode_accumulated(strip_eos=False)
+                    new_pcm = pcm[yielded_samples:]
+                    if new_pcm.size == 0:
+                        continue
+                    yielded_samples = pcm.size
+                    first_chunk_done = True
+                    yield new_pcm
+
+                # Re-raise worker exceptions surfaced via worker_exc.
+                if worker_exc:
+                    raise worker_exc[0]
+
+                # Final flush with EOS-strip so the assembled stream
+                # matches the non-streaming output to within sample
+                # rounding.
+                final_pcm = _decode_accumulated(strip_eos=True)
+                new_pcm = final_pcm[yielded_samples:]
+                if new_pcm.size > 0:
+                    yield new_pcm
+            finally:
+                thread.join(timeout=30.0)
 
     register_backend("higgs", _HiggsInProcess)
 else:
