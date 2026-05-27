@@ -25,9 +25,361 @@
 
 ---
 
-## 2026-05-26
+## 2026-05-26 (evening — TTS architecture audit)
 
-### F5 nfe_step default flipped 32 → 16 — superseding the "streaming preset" framing
+### F5-TTS cannot preserve heavy non-default accents — architectural ceiling, not a tunable
+
+**Context.** Audited the 9 Asgard sister voices through F5 cloning. Five (Beyla / Bygul / Gersemi / Heid / Saga) preserved their Nordic-English accents "close enough"; three (Freya / Eir / Trjegul) lost the accent entirely; Hnoss is a separate "wrong source accent" case. Added Mimir as a male-Nordic test voice (newly designed) — landed in the same failure pattern as the three sisters. Spent the session exhausting F5's knob + reference-content space trying to recover.
+
+**Evidence.** Sweep matrices on Mimir, two-batch:
+
+Batch 1 (vary cfg + speed): `cfg_strength ∈ {2.0, 3.0, 3.5, 4.0, 4.5}` × `speed ∈ {0.80, 0.85, 0.90}` × `nfe_step=32` (quality preset) — none recovered the accent. User-verified all listened-flat-American.
+
+Batch 2 (phoneme-rich reference + phoneme-rich text):
+- Trimmed Mimir's ref WAV to include `Yggdrasil` + heavy th/r content (forces non-default phoneme use).
+- Target text added: *"The truth often lies beneath three breaths and a thoughtful pause. I think of the runes carved at Yggdrasil's root..."* — 7× `th`, 6× `r`, 1 Nordic-anchor word.
+- `remove_silence=True` to clean inter-word artifacts.
+- 5 variants (cfg ∈ {3.0, 3.5, 4.0}, speed ∈ {0.92, 0.95, 1.0}). User verdict: "all better sounding, none preserving accent."
+
+Test text via Higgs (LLM-backbone, different architecture, same reference): user verdict for Mimir + 3 sisters: "Higgs is a win on accent" — 4-of-4 preserve accent the F5 was stripping.
+
+**Mechanism.** F5-TTS uses a diffusion-based decoder conditioned on (a) the reference's mel spectrogram and (b) the target text's phoneme sequence. The phoneme stream defaults to standard-English realization of each grapheme. When the reference has a heavy non-default accent, the model has two competing signals: phonemes pointing toward American defaults, mel context pointing toward the reference. The architecture appears to weight the phoneme stream heavier than the mel context — likely because in training the mel context was MOSTLY aligned with the standard phoneme realization (training corpus is American/British-English-heavy). Result: F5 can clone *timbre + pitch* faithfully but the phonetic realization snaps back to the target text's language defaults regardless of accent in the reference.
+
+This is consistent across the diffusion-based family — Chatterbox has the same failure mode (voice-forge LEARNINGS 2026-05-25 § chatterbox audition: "pitch+gender adapter only — does NOT preserve source accent"). XTTS-v2 is similar per user's prior testing of all backends.
+
+The Llama-backbone family (NeuTTS, Orpheus, Higgs, CosyVoice) is different architecturally: an LLM generates audio tokens directly conditioned on a reference's audio-token sequence (in-context learning). No separate phoneme decoder; the LLM learns the reference's acoustic patterns including accent.
+
+**Fix.** Hybrid per-voice backend selection:
+- F5 for the 5 sister voices where it works (low first-audio latency, audio quality good)
+- Higgs Audio V2 for the 4 problem voices (Mimir + Freya + Eir + Trjegul — though Eir still failing under Higgs as of session-end; queued for ElevenLabs re-design)
+- voice-forge's existing per-voice backend selection (`saga-comms-f5` vs `saga-comms-higgs` etc.) is the right architectural framing.
+
+**Validation.** 5-voice Higgs comparison sweep — user verdict 4/5 preserve accent: Mimir ✓ Trjegul ✓ Freya-v1 ✓ Freya-v2 ✓ Eir ✗ (separate failure mode — see entries below).
+
+**What surprised.** I spent meaningful effort on the "phoneme-rich reference + phoneme-rich text" hypothesis — the published heuristic that F5 strips accent because the target text lacks accent-bearing phonetic markers, fixable by adding markers to both reference and target. The hypothesis is *technically correct* (more phonemes give the diffuser more constraint) but the magnitude of the effect on F5 specifically is too small to matter — the architectural ceiling dominates.
+
+**Generalizable rule.** Diffusion-based TTS architectures with phoneme-aligned acoustic decoders have a structural ceiling on non-default accent preservation. No amount of cfg-strength / speed / phoneme-rich content tweaking moves that ceiling. The fix is different architecture (LLM-backbone autoregressive), not better knobs. When you've swept the relevant knob space and audio quality moves but the target trait doesn't, stop tuning and switch tools.
+
+**Refs.** Commit `7b3bef3` (Higgs streaming output + per-voice backend split). [QUEUED #58 Re-design Eir with explicit phonetic guidance]. Supersedes earlier session hypotheses about "F5 with the right reference WILL preserve accent."
+
+---
+
+### LLM-backbone TTS architectures preserve non-default accents — Higgs Audio V2 validates the family
+
+**Context.** Discovered via process of elimination after F5 + Chatterbox both failed on the same 4 voices, while NeuTTS (already in production for the daemon) preserved accent. Common variable: NeuTTS uses a Llama-3 1B backbone; F5 + Chatterbox use diffusion + VITS-derived architectures. Hypothesized the LLM-backbone family was the architectural fix.
+
+**Evidence.** Integrated two new LLM-backbone backends + tested both:
+- **Higgs Audio V2** (Boson AI, 3B Llama-3.2 backbone + audio extension, Apache-2): 4/5 voices preserve Nordic accent on first cold-test. User verdict for Mimir: "Higgs is a win on accent. Maybe a little tuning... it's not exact as the reference, but it's good enough. Frankly, it might be better." Validated subsequently on Trjegul + Freya-v1 + Freya-v2.
+- **Orpheus TTS** (Canopy Labs, 3B Llama-3 finetune, Apache-2): integrated but voice cloning is unconfirmed — see "Orpheus cloning format undocumented" entry below.
+
+For comparison, the diffusion family on the same Mimir reference:
+- F5: strips accent on all knob configurations tested (10+ variants)
+- Chatterbox: strips accent + adds timbre wobble
+
+**Mechanism.** Llama-backbone TTS architectures predict audio tokens (e.g., SNAC codes for Orpheus, a multimodal audio codec for Higgs) directly from the LLM's next-token distribution, conditioned on the reference audio's tokenized form. There's no separate phoneme decoder to bias toward target-language defaults. In-context learning over the reference's audio token sequence makes the model produce target text in the reference's actual acoustic style — including accent.
+
+Higgs's ChatML cloning prompt format makes this concrete:
+```
+system: voice-cloning instruction
+user:   <ref_text>          ← what the reference SAYS
+assistant: <ref_audio>      ← HOW the reference says it (as audio tokens)
+user:   <target_text>       ← what to generate, in the SAME voice
+```
+The model is asked to continue the conversational pattern. The "voice" of the assistant turn is established by the reference audio tokens; the model generates the next assistant turn in that voice.
+
+**Fix.** Higgs is voice-forge's production backend for the 4 voices F5 can't carry. Mimir + Freya v1 + Freya v2 + Trjegul confirmed; Eir queued for re-design. F5 stays default for the 5 sister voices it handles well (lower latency).
+
+**What surprised.** That a 3B-param LLM-backbone TTS with verified-good architecture can be *2.45-3.0× slower than realtime* on M2 Ultra MPS while a much-smaller F5 diffusion model runs ~5× realtime. The autoregressive token-by-token generation pattern is fundamentally bandwidth-bound — no architectural escape via knob tuning. The honest answer for production-realtime LLM-backbone TTS on Apple Silicon is MLX (separate entry).
+
+**Generalizable rule.** For "preserve non-default accent in clone" specifically — LLM-backbone architectures are the working family. Diffusion + VITS-derived architectures hit a structural ceiling. This generalizes beyond TTS: the same architectural distinction matters for any task where the target trait is high-dimensional in the reference but the model has strong defaults (Llama-backbone in-context-learning beats fixed-decoder bias-correction).
+
+**Refs.** Commit `ead2b34` (Orpheus + Higgs backends). Commit `7b3bef3` (Higgs streaming win). [DECISIONS pending § per-voice backend selection].
+
+---
+
+### Higgs perf on Apple Silicon MPS — streaming output wins; torch.compile + quantization don't
+
+**Context.** Higgs Audio V2 (transformers-based backend) lands at ~2.45-3.0× slower than realtime on M2 Ultra MPS — usable for design-time auditioning but slow for hermes-agent conversational use. Ran a comprehensive perf investigation across the four canonical optimization paths.
+
+**Evidence.** Per-optimization measurements on Mimir's reference, same target text:
+
+| Optimization | Warm RTF | Audio quality | Verdict |
+|---|---:|---|---|
+| **Baseline (control)** | 2.45× | peak 0.706 RMS 0.1040 (reference) | — |
+| `torch.compile(mode="reduce-overhead", backend="inductor")` | 3.19× | audio different (RMS 0.0917, dur 29.6s vs 26.2s) | REJECTED — slower + quality regression |
+| `optimum-quanto` int8 weights | 7.32× | audio different (RMS 0.1110) | REJECTED — 3× slower |
+| fp16 instead of bf16 | 2.67× | audio different (RMS 0.1273) | REJECTED — slower + Llama overflow risk |
+| **Streaming output** (chunks=10/25 frames) | 2.59× | bit-equivalent (1% RMS variance from chunk-boundary rounding) | KEPT — first-audio drops from ~65s → ~3s |
+
+**Mechanism.**
+
+`torch.compile`: Dynamo recompiles the model graph per-layer for `layer_idx == 0` specialization on each call. Partial eager fallback. Net: slower than uncompiled because compilation amortization never gets to pay off, and the partial-fallback path produces subtly different audio (different numeric paths in attention).
+
+`optimum-quanto int8`: int8 has no fast MPS kernel as of torch 2.8 / quanto 0.2. The library's QLinear falls through to dequantize-then-matmul each forward step. Net: 3× slowdown on the bandwidth-bound steps.
+
+`fp16` vs `bf16`: Llama-family attention computations include large magnitude differences inside the softmax exponent. fp16's smaller exponent range causes occasional overflow / underflow, producing slightly different attention weights, propagating to subtly different audio output. bf16 has the larger exponent range Llama was trained for. (Marginal performance difference is incidental.)
+
+Streaming: model.generate() runs in a worker thread; an AsyncStreamer-style queue surfaces audio token frames as they're generated; the main thread decodes every N frames via SNAC and yields PCM chunks. Total wall-time is unchanged (the LLM still has to generate every token), but the first audible PCM is available after ~10 frames (0.4s of audio) instead of waiting for the full sequence. For sentence-pumped UX where the user hears sentence N while N+1 is generating, this is the actual win.
+
+**Honest architectural truth.** Per-step generation is bandwidth-bound at ~100 ms/step on a 5.77B-param Llama-family model. No torch+MPS knob moves the bandwidth limit. Net throughput on this model on this hardware is ~10 tokens/second × ~12.5 audio tokens per audio frame at 25Hz codec rate = ~30 seconds of audio per minute of inference. The streaming output path is the workable solution for conversational UX; total throughput needs MLX to drop substantially.
+
+**Fix.** Streaming output shipped in `src/voice_forge/backends/higgs.py` (commit `7b3bef3`). Compute optimizations all reverted out of the file. MLX port investigation moved up — `mlx-community/higgs-audio-v2-3B-mlx-q6` exists and is reported at 0.33× RTF on M5 Max.
+
+**Generalizable rule.** For LLM-backbone TTS on Apple Silicon MPS via PyTorch: don't waste cycles on torch.compile / int8-quantization / dtype-tuning. They're broken-or-marginal on this stack. Streaming output is the high-leverage win. The total-throughput fix is MLX, not torch optimizations.
+
+**Refs.** Commit `7b3bef3`. Subagent report in `/tmp/higgs-perf/` (measurements + audio A/B). [QUEUED #57 → completed: Higgs MLX backend]. [QUEUED #59 generic mlx_audio backend refactor].
+
+---
+
+### mlx-community on HuggingFace is the free-port repository for Apple Silicon ML
+
+**Context.** Higgs perf investigation concluded "MLX port" was the necessary next step but estimated as 1-2 weeks of work. Before committing that, checked whether the community had already done it.
+
+**Evidence.** `mlx-community/higgs-audio-v2-3B-mlx-q6` exists, Apache-2, 4.75 GB (6-bit quantized), reported 0.33× RTF on M5 Max. Loadable via the `mlx-audio` PyPI package (Apache-2, maintained by `Blaizzy/mlx-audio`):
+
+```python
+from mlx_audio.tts.utils import load_model
+model = load_model("mlx-community/higgs-audio-v2-3B-mlx-q6")
+```
+
+Same `load_model + generate_audio` API works for every TTS model in mlx-community's catalog. Discovered additional pre-ports relevant to voice-forge: `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16` (Qwen team's voice-design + cloning model), Kokoro-MLX variants, Supertonic-3, etc.
+
+**Mechanism.** mlx-community is a HuggingFace organization populated by community contributors who port popular ML models to Apple's MLX framework + apply quantization. They're the analog to TheBloke (LLM quantizations) but specifically for MLX. The `mlx-audio` library is the unified runtime — same API for any TTS model in the catalog.
+
+For voice-forge: ONE generic `mlx_audio` backend module supports ALL their TTS models via a model_path config parameter. New models become a `fleet.yaml` line change.
+
+**Fix.** Higgs MLX integration in flight (task #57 dispatched to subagent — pending completion at session-end). Subsequent refactor to generic `mlx_audio` backend (task #59 queued).
+
+**Generalizable rule.** Before porting an ML model to a new platform, check mlx-community (Apple Silicon), TheBloke (GGUF quantizations), and bartowski (mixed quantizations). The community has often done the work. Saves 1-2 weeks per model when pre-ports are available.
+
+**Refs.** [QUEUED #57 Higgs MLX backend (in flight)] [QUEUED #59 generic mlx_audio backend refactor] [QUEUED #60 Qwen3-TTS-VoiceDesign provider].
+
+---
+
+### Qwen3-TTS-VoiceDesign is the local-open-source Voice Design analog to ElevenLabs
+
+**Context.** voice-forge's `voice_design` module was ElevenLabs-only because no open model offered description-to-voice at production quality. Found Qwen3-TTS-VoiceDesign in mlx-community while investigating Higgs MLX.
+
+**Evidence.** Apache-2, supports BOTH:
+- Voice cloning (via `ref_audio` + `ref_text`)
+- Voice design (via `instruct` parameter — natural language voice description)
+
+Description language: Chinese OR English. Generated speech language: any supported language (decoupled from description language).
+
+Description cap: **2048 chars** (vs ElevenLabs's silent 500-char persistence cap — 4× more room for detailed phonetic + persona instructions).
+
+API (upstream Qwen Python package — mlx-audio port may or may not expose `generate_voice_design`; needs verification):
+```python
+wavs, sr = model.generate_voice_design(
+    text="...",
+    instruct="A native Norwegian speaker speaking English. Female...",
+)
+```
+
+**Mechanism.** Qwen3-TTS-VoiceDesign uses the Qwen3-1.7B backbone trained on instruction-following voice generation. The `instruct` text conditions the voice characteristics; `text` is the content. Architecturally similar to ElevenLabs Voice Design (description → embedding → audio decoder) but locally runnable + uncapped on description length.
+
+**Implications.** voice-forge's `voice_design` module no longer needs to depend on external API. End-to-end pipeline (design + clone + render) becomes fully local-capable on Apple Silicon. Privacy story improves (no descriptions leaving the host). Audition cost drops to ~$0 (vs ElevenLabs ~$0.05 per 3-preview audition). Description length cap quadruples, enabling much richer phonetic + persona specs.
+
+**Fix.** [QUEUED #60 Add Qwen3-TTS-VoiceDesign as voice_design provider]. Depends on the generic mlx_audio backend landing first (#59) — same `load_model + generate_audio` API.
+
+**Generalizable rule.** When evaluating "do we need to keep paying for service X?" — for voice generation specifically, check the latest open-source releases every ~6 months. The gap between ElevenLabs Voice Design (proprietary) and Qwen3-TTS-VoiceDesign (Apache-2, late 2025) shrank from "no comparable open model" to "open model with superior input constraints" in roughly a year.
+
+**Refs.** [QUEUED #60].
+
+---
+
+### Phonetic-imperative voice descriptions beat categorical accent labels in ElevenLabs Voice Design
+
+**Context.** Mimir voice 1 (formal voice_engineering structured spec: "Heavy Norwegian accent (Bokmål-rooted)") — no Nordic accent in the rendered TTS output despite the explicit accent label. Mimir voice 2 (user's hand-written description with explicit "th drifts toward d", "rolled R sounds", "softened consonants") — Nordic accent comes through clearly.
+
+**Evidence.** Voice Design audition matrices and their renderings, user-verified by ear:
+
+| Voice | Description style | Accent in TTS output |
+|---|---|---|
+| Mimir v1 (auto-built from structured spec) | "Heavy Norwegian accent (Bokmål-rooted — not Swedish, not Danish)" — categorical labels | No accent — sounds modern American |
+| Mimir v2 (auto-built, "Heid-pattern remix") | Same category labels + "the kind a wise elder from the older world would speak" — character labels | No accent |
+| Mimir v3 (user-hand-authored) | "rolled R sounds, softened consonants, th drifts toward d" — phonetic imperatives | Nordic accent preserved |
+| Freya v1 (user hand-authored) | "Heavy Bokmål-rooted accent... rolled R, softened consonants, th drifts to d" + transliterated sample showing accent ("De truth lies beneath three breaths") | Nordic accent preserved |
+| Freya v2 (user hand-authored, tighter) | Same phonetic instructions, no transliterated sample | Nordic accent preserved; Whisper transcribed "the" as "de" — audio physically carries the softening |
+
+The phonetic imperatives are present-tense verbs ("rolled R sounds", "th drifts toward d") describing WHAT the voice does articulately, not abstract WHAT THE VOICE IS labels.
+
+**Mechanism.** ElevenLabs Voice Design's description-conditioning model appears more sensitive to concrete phonetic instructions than to abstract category labels. The mechanism is consistent with how diffusion-text-conditioning models work generally: concrete operations are well-represented in training data ("rolled R" → specific spectral features), while categorical labels ("Norwegian accent") are weaker priors because the training distribution has many "Norwegian" labels mapped to varying phonetic realizations. The imperative form anchors specific behavior; the categorical form invites the model to pick from a distribution.
+
+**Generalizable rule.** For ElevenLabs Voice Design specifically: write descriptions with phonetic imperatives ("softened consonants", "rolled R", "th drifts toward d") not categorical labels ("Heavy X accent"). Imperatives describe operations; labels invite distributional sampling. For local description-to-voice models (Qwen3-TTS-VoiceDesign) the same principle likely holds — verify when integrating.
+
+**Refs.** Commit `7b3bef3` (Freya v1/v2 references). [QUEUED #58 Re-design Eir with phonetic imperatives].
+
+---
+
+### ElevenLabs Voice Design pipeline quirks discovered through Mimir + Freya tuning
+
+A grab-bag of real undocumented behaviors that cost session time to surface. Treat this entry as a compendium for future ElevenLabs work.
+
+**1. `output_format` is a QUERY parameter, not BODY.** The `/v1/text-to-speech/{voice_id}` endpoint silently ignores `output_format` in the body and returns the default `mp3_44100_128`. Code that treats the returned bytes as int16 PCM (because that's what was requested) produces pure noise. Fix in `voice_forge/voice_design/elevenlabs.py` commit `0b51de3`.
+
+**2. Voice Design preview ≠ TTS render.** When ElevenLabs Voice Design persists a voice, the resulting voice_id stores a learned voice embedding. The PREVIEW audio (rendered at design-time with the full description text in the conditioning context) is NOT reproducible via subsequent `/v1/text-to-speech/{voice_id}` calls (which only have the embedding + target text, no description). Description-driven traits like accent strength can be present in the preview but absent in the TTS render. Implication: the preview MP3 stored with the voice IS the highest-fidelity representation available; TTS rendering of the same voice_id will be different (especially weaker on accent).
+
+**3. Description input field caps at 1000 chars but persists ~500.** UI accepts up to 1000-char descriptions but silently truncates to ~500 chars on save. Mimir's stored description is exactly 496 chars — at the cap. Anything past that gets dropped. Voice-forge's `voice_design.prompt_builder` has been updated to cap at 480 chars (with 20-char safety margin). [QUEUED #56 captures the doc update.]
+
+**4. No "remix from reference" endpoint.** Voice Design accepts only `voice_description` (text description). There's no documented endpoint for "design a new voice based on this existing reference WAV + this description-of-changes". The architectures that DO support that (Cartesia Sonic, Resemble AI Voice Adapt) are different vendors.
+
+**5. Voice library accent taxonomy is small.** `accent=norwegian` returns 0 results in `/v1/shared-voices`. All Nordic-leaning voices in the library are labeled `swedish` (most), `german` (some Northern-European-flavored), or unlabeled. The free-text `description` field is more accurate than the `accent` enum for Scandinavian sub-accents.
+
+**6. Voice Library entries are real recorded voice actors.** They get royalties through ElevenLabs's marketplace. Voice Design outputs are synthetic (no specific real person). The ethics distinction: cloning a Library voice = derivative of a contracted-and-paid voice actor; designing a Voice Design voice = synthetic, no underlying person.
+
+**Refs.** Commit `0b51de3` (output_format bugfix + library client). [QUEUED #56 (500-char cap doc + code update)].
+
+---
+
+### Orpheus TTS cloning prompt format is undocumented upstream — community work pending
+
+**Context.** Integrated Orpheus TTS (Canopy Labs, Llama-3 3B finetune, Apache-2) as a sibling LLM-backbone backend to Higgs. Initial cold-test on Mimir's reference produced clean audio that bore no resemblance to the source reference voice — sounded young and English, like a default preset voice.
+
+**Evidence.** User verdict: "output is sounds ok, no accent and totally different 'sound'. Sounds young, not old... timber is off. Orpheus might as well have been a preset voice, it really bears no resemblance to the original."
+
+Canopy Labs's own README lists "Fix voice cloning Colab notebook implementation" as an open checklist item. The PyPI `orpheus-speech` package's `generate_speech()` method accepts only preset voice names (`voice="tara"`, etc.) — no documented reference-audio cloning kwargs. The voice_id parameter takes a finite enum of pre-trained voices.
+
+Our integration manually reconstructed a cloning prompt format from inference + the model's audio-token vocab layout:
+```
+[START_OF_HUMAN] ref_text [END_TEXT_IDS] ref_audio_tokens [START_OF_HUMAN] target_text [END_TEXT_IDS]
+```
+
+This is plausible based on how the model was trained, but **Canopy Labs has not published the actual training-time cloning conditioning format**.
+
+**Mechanism.** Orpheus accepts the "malformed" cloning prompt as a Llama-style token sequence, generates a valid audio output, but the output isn't conditioned on the reference voice — the model falls back to its preset voice distribution because the reference tokens aren't where the model was trained to expect cloning conditioning. Net: cloning is fake; output is a preset voice with no resemblance to the supplied reference.
+
+**Fix.** [QUEUED #54 Orpheus cloning prompt-format investigation]. Two paths: (a) wait for Canopy Labs to ship official cloning + copy their format; (b) experimental prompt-format sweep to find what actually conditions the model on the reference. Given Higgs works and has documented cloning, Orpheus is deprioritized.
+
+**Generalizable rule.** When integrating an open-source ML model, check whether the capability you need is in the **documented + tested** path or the **inferred-from-code** path. The two often diverge — the documented path is what the model was actually trained on; the inferred path can technically run but doesn't activate the capability. Save time by checking the upstream README's open-issue checklist before integrating an unstable capability.
+
+**Refs.** Commit `ead2b34` (Orpheus backend, marked best-effort). [QUEUED #54].
+
+---
+
+### Boson AI's higgs-audio package wheel silently drops two subpackages
+
+**Context.** Integrating Higgs Audio V2 via `boson-multimodal @ git+https://github.com/boson-ai/higgs-audio.git`. Initial cold-test failed with `ModuleNotFoundError: No module named 'boson_multimodal.serve'` despite `boson-multimodal` being installed.
+
+**Evidence.** Inspecting the installed wheel:
+```
+boson_multimodal/
+├── __init__.py
+├── constants.py
+├── data_collator/
+├── data_types.py
+├── dataset/
+└── model/
+    └── higgs_audio/
+```
+The repo on GitHub has additional subdirectories (`serve/`, `audio_processing/`) that DON'T appear in the installed wheel. Both contain critical modules — `audio_processing/higgs_audio_tokenizer.py` is required for voice cloning.
+
+**Mechanism.** The repo's `setup.py` uses setuptools' default `find_packages()`. `find_packages()` only includes directories that contain an `__init__.py` marker. The `serve/` and `audio_processing/` subdirectories in the upstream repo lack `__init__.py` files (likely intended as namespace packages or just oversight). `find_packages()` silently skips them. The wheel ships only the markered packages. Cloning code that depends on the dropped subpackages fails at import.
+
+**Fix.** Added `src/voice_forge/backends/_higgs_post_install.py` — runs after `uv pip install` for the higgs venv. Detects the missing `audio_processing/` subtree via a smoking-gun file (`higgs_audio_tokenizer.py`), shallow-clones the upstream repo, copies the missing subdirectory tree into the venv's site-packages, synthesizes the `__init__.py` markers the upstream maintainer forgot. Idempotent — re-running is a no-op once the modules become importable.
+
+Wired through a new `_BACKEND_POST_INSTALL` table in `cli.py`. Only `higgs` has an entry today; pattern is available for future backends with similar upstream defects. Commit `ead2b34`.
+
+**What surprised.** That a production-published Python package can be missing modules from its own repository because `find_packages()` is silent about it. No warning, no error, just runtime ImportError when a downstream user touches the missing code. Worth filing upstream — not done yet.
+
+**Generalizable rule.** When integrating a third-party Python package, verify the package layout matches the repo layout: compare `pip show -f <package>` output against the repo's directory tree. Discrepancies are real (silent setuptools drops, dynamic-import workarounds, etc.) and produce confusing ImportError downstream.
+
+**Refs.** Commit `ead2b34`. Sibling LEARNING 2026-05-25 § "Upstream packaging defects in TTS backend ecosystem".
+
+---
+
+### Boson AI's 2026-04-04 config rewrite broke open-source classes — must pin HF revisions
+
+**Context.** Following the higgs-audio packaging workaround, subsequent runs of the Higgs cold-test failed with config-loading errors despite the package now installing correctly.
+
+**Evidence.** Boson AI committed `trfms-support` on 2026-04-04 to both their model + tokenizer HF repos (`bosonai/higgs-audio-v2-generation-3B-base` and `bosonai/higgs-audio-v2-tokenizer`). The commit rewrote the config schema from a flat structure to a transformers-native nested form with `acoustic_model_config` / `semantic_model_config` blocks. The open-source `HiggsAudioModel` and `HiggsAudioTokenizer` Python classes (shipped in the boson-multimodal package) still parse the OLD flat schema and raise on the new one.
+
+**Mechanism.** Classic schema migration without synchronized client updates. The HF Hub repos got the new schema; the GitHub-tracked Python classes didn't. Anonymous downloads of the model from the default `main` branch pull the new schema; the open-source code can't parse it.
+
+**Fix.** Pin both HF revisions to the last pre-rewrite commits:
+- Model: `1084018` (pre-trfms-support)
+- Tokenizer: `9d4988f` (pre-trfms-support)
+
+These pins live in `src/voice_forge/backends/higgs.py` (the transformers-based backend). Upstream issue #176 tracks the unresolved schema-vs-code divergence — pins lift when they update the classes.
+
+**Generalizable rule.** When integrating a HuggingFace-hosted model from a separately-maintained Python class (model_name_or_path in `from_pretrained`), pin the HF revision rather than tracking `main`. The Python class is versioned in your dependencies (your `pyproject.toml`); the HF repo is rolling. Schema drift on HF can break the Python class at any time. Bake the pin until upstream confirms compatibility.
+
+**Refs.** Commit `ead2b34`. [Boson AI issue #176](https://github.com/boson-ai/higgs-audio/issues/176).
+
+---
+
+### Orpheus cloning is implementable on Apple Silicon without `vllm` — raw transformers + snac is the path
+
+**Context.** Canopy Labs's `orpheus-speech` PyPI package depends on `vllm`. vllm is CUDA-only and doesn't install on Apple Silicon (no MPS support; refuses on arm64 macOS). Initial integration attempt failed at provisioning.
+
+**Evidence.** `uv pip install voice-forge-tts[orpheus]` errored on vllm 0.4.2 → xformers transitive dep → no arm64 macOS wheel + no buildable source.
+
+**Mechanism.** vllm is an inference-optimization library — bumps throughput via PagedAttention + custom CUDA kernels. It's an optimization layer over transformers, not a requirement of the Orpheus model itself. Orpheus is just a Llama-3-3B fine-tune with an audio-extended vocabulary; it can run on bare transformers + the SNAC audio codec.
+
+**Fix.** Rewrote `_OrpheusInProcess` (child-side of the subprocess backend) to skip `orpheus-speech` entirely. Uses raw transformers + snac:
+- `AutoModelForCausalLM.from_pretrained()` for the Llama backbone
+- `AutoTokenizer.from_pretrained()` for text tokens
+- `SNAC.from_pretrained("hubertsiuzdak/snac_24khz")` for audio codec decode
+- Manual implementation of the cloning prompt sequence + SNAC interleave layout (audio tokens at offset 128266, 7-tokens-per-frame, 4096-entry codebooks)
+
+`[orpheus]` pyproject extras updated to drop `orpheus-speech` and pull raw deps (`transformers`, `torch`, `snac`, `librosa`, `soundfile`, `accelerate`). Default model switched to `audo/orpheus-3b-0.1-ft` (ungated mirror of HF-gated `canopylabs/orpheus-3b-0.1-ft`). Commit `ead2b34`.
+
+**Generalizable rule.** When an upstream PyPI package fails to install due to CUDA-only optimization deps (vllm, xformers, flash-attn), check whether the optimization is *integral* to the model or *additive*. For most Llama-family models, the optimization layer is additive — the model itself runs fine on raw transformers + MPS. Save 1-2 days of investigation by checking the model architecture before assuming you need to wait for vllm-MPS support.
+
+**Refs.** Commit `ead2b34`.
+
+---
+
+### ref.txt alignment matters for cloning but isn't the dominant factor
+
+**Context.** Eir's `ref.txt` said "5 hours 40", "4 beats", "2 week" — the WAV speaks them as words ("five hours forty", "four beats", "two week"). Suspected the text-audio mismatch was poisoning F5 + Higgs's phoneme alignment of the reference. Hypothesis: fixing the mismatch would restore Eir's accent in cloning.
+
+**Evidence.**
+
+Fixed `personas/asgard/eir-wellness/ref.txt` to spelled-out form matching Whisper-verified WAV content. Re-ran Higgs cloning on Eir with corrected ref.txt. Re-listened.
+
+User verdict: "eir was the only one that still doesn't have nordic accent" — even AFTER the corrected ref.txt. The 4 other voices in the comparison sweep (Mimir, Trjegul, Freya-v1, Freya-v2) all preserved accent; Eir alone did not.
+
+**Mechanism.** ref_text is used by both F5 (for phoneme alignment of the reference's mel) and Higgs (for the ChatML cloning prompt's "user turn" — what the reference SAYS). Mismatched ref_text genuinely degrades cloning quality because the model is told the reference says X but it actually says Y. However, the magnitude of the effect on accent specifically is small relative to the dominant signal — the *intrinsic accent strength of the source recording itself*. Eir's source ElevenLabs voice apparently has weaker accent characteristics in the recorded audio than the other 4 voices, regardless of ref_text quality.
+
+**Fix.** Eir queued for re-design with the phonetic-imperative description pattern that fixed Freya v1/v2 (entry above).
+
+**Generalizable rule.** When ref.txt drifts from ref.wav contents, fix it — it's a real bug. But don't expect fixing ref.txt to recover capabilities that the source voice itself doesn't carry. Reference-driven cloning is upstream-bounded: if accent X isn't acoustically present in the reference, no model can clone it into existence regardless of how cleanly the ref_text is aligned.
+
+**Refs.** Commit `7b3bef3`. [QUEUED #58 Re-design Eir with phonetic imperatives].
+
+---
+
+### Per-voice backend selection is the production fleet pattern for heterogeneous voice profiles
+
+**Context.** Started the session trying to fix all 4 problem voices (Freya / Eir / Trjegul / Mimir) under a single backend (F5). Exhausted F5's tunable space without success. Pivoted to "which backend works for which voice" — turned out F5 works for 5/9, Higgs for 4/9 (with Eir TBD), no single backend works for all.
+
+**Evidence.** Empirical backend × voice matrix:
+
+| Voice | F5 | Higgs |
+|---|---|---|
+| Beyla | ✓ accent preserved | (not tested) |
+| Saga | ✓ accent preserved | (not tested) |
+| Bygul | ✓ with cfg+speed tuning | (not tested) |
+| Gersemi | ✓ accent preserved | (not tested) |
+| Heid | ✓ accent preserved | (not tested) |
+| Freya | ✗ strips accent | ✓ via v1/v2 designs |
+| Eir | ✗ strips accent | ✗ (queued re-design) |
+| Trjegul | ✗ strips accent | ✓ accent preserved |
+| Hnoss | ✓ (but source has wrong accent — separate fix) | (not tested) |
+| Mimir | ✗ strips accent | ✓ via v3 design |
+
+**Mechanism.** Voices differ in source-recording characteristics (pitch, accent strength, vocal tract size, gender-driven formant profile). Different backend architectures handle these characteristics differently. F5 is good at mid-range female pitch + clear consonant articulation; Higgs is good at heavy non-default accents but slower. No single backend dominates across the voice characteristic space.
+
+**Fix.** voice-forge's existing per-voice backend selection (`saga-comms-f5` vs `saga-comms-higgs` as separate registry entries; production hermes-agent routes to the chosen variant per persona) is the right architectural framing. Per-voice optimization beats whole-fleet optimization. Production fleet config (next commit) records per-voice backend assignments in `personas/asgard/fleet.yaml`.
+
+**Generalizable rule.** When integrating multiple cloning backends + a heterogeneous voice fleet, don't optimize for "one backend that handles all voices." Optimize for "per-voice backend selection." The infrastructure cost (auto-coverage registration + fleet config) is small; the capability gain is large.
+
+**Refs.** Auto-coverage in `src/voice_forge/persona_coverage.py`. Per-voice backend column in `personas/asgard/fleet.yaml` (commit pending).
+
+---
+
+
 
 **Context.** [LEARNINGS 2026-05-25 § F5 nfe_step=16](#f5-nfe_step16-is-audibly-equivalent-to-32-on-long-form-narrative-on-mac-studio) found that 16-step F5 synthesis was audibly indistinguishable from 32 on the 11-sentence Saga narrative. At that point we kept 32 as the F5 default and treated 16 as an opt-in "streaming preset" — out of conservatism, not data.
 
