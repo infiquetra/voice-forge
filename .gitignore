@@ -228,3 +228,15 @@ __marimo__/
 # match src/voice_forge/secrets/ (the *module*, which we DO want tracked).
 /secrets/
 .voice-forge/
+
+# macOS Finder metadata
+.DS_Store
+
+# Claude Code per-machine state. Worktrees, jobs, context snapshots, and
+# checkpoints are local-only. Plans under .claude/plans/ ARE useful repo
+# history (they document why we did what we did) so they stay tracked
+# via the negation pattern below.
+.claude/worktrees/
+.claude/context/
+.claude/checkpoints/
+.claude/jobs/
