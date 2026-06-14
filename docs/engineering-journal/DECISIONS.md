@@ -21,6 +21,38 @@
 
 ---
 
+## 2026-06-14
+
+### voice-forge is a public-OSS local voice-forging studio — not personal infra, not a one-model server (STRATEGY.md)
+
+**Decision.** Two linked commitments, recorded while writing the root `STRATEGY.md`:
+
+1. **Direction = public open-source product**, not personal infrastructure. voice-forge is built for the world's self-hosted voice-agent builders; the Asgard sister-voices fleet is the dogfood / reference deployment, not the customer. Onboarding, install reliability across hosts, and outside-contribution ergonomics become first-class concerns.
+
+2. **Identity = a voice-forging studio backed by a serving engine**, not a serving engine alone. The product owns the whole **design → bind → serve** lifecycle: forge a voice (design-from-description on local models, or clone-from-reference), audition + tune it across model families, bind it to an agent persona, and serve it over the OpenAI-compatible API. The human-facing Forge interface (`/lab → /forge`) is a defining surface, co-equal with the API — framed as "a better ElevenLabs Voice Design, local and agent-aware."
+
+**Rejected alternatives.**
+
+- **Personal infra, public-ready (forcing-function only).** The de-facto status today: one consumer (home-lab Hermes agent), personas excluded from the wheel, `/lab` as a private workbench. Rejected as the *recorded* direction — the user chose to point it outward. If outside adoption never materializes, this is the fallback to revisit.
+- **Serving engine only** — the original framing ("pluggable TTS service for agent voices"). Rejected as too narrow: it cedes the most distinctive half (local voice *design*) to ElevenLabs and reduces voice-forge to one commoditized serving server among many (Kokoro-FastAPI, xtts-streaming-server). The forge is the differentiator.
+- **Cloud voice-design tool (ElevenLabs-style SaaS).** Rejected — self-hosted, own-your-voices, own-your-hardware is the whole point; a hosted offering is explicitly out (STRATEGY § Not working on).
+
+**Rationale.**
+
+- The name is *voice-**forge***; forging voices — not just serving them — is the direction the codebase has been drifting toward (the Voice Design pipeline, the queued `/forge` web-UI redesign P1, the Qwen3-TTS-VoiceDesign local-design provider #60).
+- The serving side is increasingly commoditized; the local design+bind+serve lifecycle on your own models is not offered by anything in the prior-art survey.
+- Per-voice backend selection — the core technical finding — only delivers value if forging a voice and binding it to its best backend is a first-class workflow, which makes the studio strategically load-bearing rather than a side feature.
+
+**Revisit when.**
+
+- 12+ months pass with no outside adoption signal (external issues/PRs ~zero, no third-party deployments we hear about) → revisit the public-product direction; consider reverting to "personal infra, public-ready."
+- A local voice-design model good enough to displace ElevenLabs Voice Design fails to materialize (Qwen3-TTS-VoiceDesign #60 and successors underperform on phonetic-imperative prompts) → revisit how central the *design* half can be versus clone-only.
+- Maintainer capacity can't sustain a human-facing UI surface to product quality → re-scope the Forge from "defining surface" back to "internal workbench."
+
+**Refs.** Root `STRATEGY.md` (2026-06-14). [QUEUED P1 "The Forge: full web-UI redesign"](QUEUED.md), [#60 "Qwen3-TTS-VoiceDesign provider"](QUEUED.md), [#59 "generic mlx_audio backend"](QUEUED.md). [PRIOR_ART.md](../PRIOR_ART.md) — no surveyed tool offers local design+bind+serve.
+
+---
+
 ## 2026-05-26
 
 ### F5 nfe_step default flipped from 32 → 16 (commit pending)
