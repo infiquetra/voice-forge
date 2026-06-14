@@ -7,12 +7,24 @@
  * default so you can see how far you've pushed it. Plus a description
  * <textarea> for re-describing the voice in words.
  *
- * Two ways to hear a change, both flowing OUT as a `forge-audition`
- * CustomEvent (the shell owns the actual synth — see WS /v1/tts/stream):
- *   - thumb-release on a slider → detail {voice, sampling:{...overrides}}
+ * Hearing a change (U9): a slider thumb-release runs a LOCAL one-shot WS
+ * audition (ws-audition.js → /v1/tts/stream), plays the result in this editor's
+ * own <forge-waveform>, and manages store.forging itself — mirroring
+ * forge-serve-console._run, which owns its synth the same way. The editor owns
+ * the audition end to end (fork B): the chip that plays the take must live in a
+ * node that does NOT re-render on `forging` (this editor's `observe` excludes
+ * it), so a forging flip can't tear the playing chip down mid-play.
+ *
+ * Both triggers ALSO dispatch a `forge-audition` CustomEvent (bubbles+composed)
+ * so the shell keeps an open seam for future host-level listeners (telemetry, a
+ * global "auditioning" indicator) — but that event is telemetry, not the
+ * load-bearing path; the WS round-trip above is.
+ *   - thumb-release on a slider → LOCAL audition + event {voice, sampling:{...}}
  *     (only knobs moved off their default ride along — request-scope, minimal)
- *   - a ~600ms debounced pause typing in the description → detail
- *     {voice, description}
+ *   - a ~600ms debounced pause typing in the description → event
+ *     {voice, description} ONLY. Re-describing is a DESIGN op (ElevenLabs
+ *     text→voice) with no request-scope synth — out of scope for U9, so the
+ *     editor never opens a WS for it. It stays event-only (the shell logs it).
  *
  * Controls group by intent — Identity (what it is) / Voice (how it sounds) /
  * Lines (how it speaks) — so the bench reads as a spec, not a wall of knobs.
@@ -21,6 +33,7 @@
 
 import { ForgeElement, esc } from "./base.js";
 import { store } from "./store.js";
+import { auditionVoice } from "./ws-audition.js";
 
 // Which group each tunable lands in. Anything unmatched falls to "Voice".
 // Keyed on substrings so new backend knobs slot in without a code change.
@@ -44,6 +57,9 @@ class ForgeSpecEditor extends ForgeElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     clearTimeout(this._descTimer);
+    // Focus-switching away mid-audition must not leak a socket or leave the
+    // anvil stuck hot — abort the in-flight take and clear forging if ours.
+    this._teardownAudition();
   }
 
   /** The voice this editor edits — the attribute wins, else the focused one. */
@@ -76,6 +92,13 @@ class ForgeSpecEditor extends ForgeElement {
       #root { padding: var(--forge-gap); display: flex; flex-direction: column; gap: var(--forge-gap-lg); }
 
       .empty { color: var(--forge-text-faint); font-size: 13px; }
+
+      /* Audition strip — the local WS take plays here, adjacent to the knobs. */
+      .audition { display: flex; align-items: center; gap: var(--forge-gap-sm); }
+      .audition-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--forge-text-faint); }
+      .audition forge-waveform { flex: 1 1 auto; min-width: 0; }
+      .audition-status { font-family: var(--forge-mono); font-size: 10px; color: var(--forge-text-faint); white-space: nowrap; }
+      .audition-status[data-state="error"] { color: var(--forge-bad); }
 
       .group { display: flex; flex-direction: column; gap: var(--forge-gap-sm); }
       .group > h3 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--forge-text-faint); font-weight: 600; }
@@ -131,11 +154,25 @@ class ForgeSpecEditor extends ForgeElement {
       buckets[g ? g.id : "voice"].push(name);
     }
 
-    // Identity — words first, then any identity-class knobs (e.g. seed).
+    // The audition strip: a compact player fed by the LOCAL WS audition, plus a
+    // status note. It's a FIXED part of the markup (not inside the per-knob
+    // loop) so bind() can re-find and re-wire it on every paint. It must NOT
+    // carry untrusted text — the <forge-waveform> is fed PCM imperatively and
+    // the status is set from a fixed vocabulary, so no esc() needed here.
+    const auditionStrip = `
+      <div class="audition" role="group" aria-label="audition">
+        <span class="audition-label">audition</span>
+        <forge-waveform></forge-waveform>
+        <span class="audition-status" data-state="idle" aria-live="polite"></span>
+      </div>`;
+
+    // Identity — words first, then the audition strip, then any identity-class
+    // knobs (e.g. seed).
     const identity = `
       <section class="group">
         <h3>Identity</h3>
         <textarea id="desc" placeholder="Describe this voice — warm, gravelly, mid-40s narrator…">${esc(voice.description || "")}</textarea>
+        ${auditionStrip}
         ${buckets.identity.map((n) => this._knob(n, schema[n], sampling)).join("")}
       </section>`;
 
@@ -219,7 +256,12 @@ class ForgeSpecEditor extends ForgeElement {
     return out;
   }
 
-  /** Fire the shell's synth — it owns the WS /v1/tts/stream round-trip. */
+  /**
+   * Open seam for the shell: dispatch a `forge-audition` event (bubbles +
+   * composed). Telemetry only — the editor OWNS the actual sampling audition via
+   * _runAudition (fork B). The shell logs this; it must NOT open a WS off it or
+   * the take would synth twice.
+   */
   _audition(detail) {
     const voice = this._voiceId();
     if (!voice) return;
@@ -228,7 +270,75 @@ class ForgeSpecEditor extends ForgeElement {
     );
   }
 
+  /**
+   * Run the LOCAL WS audition for the focused voice's current overrides:
+   * cancel any in-flight one, synth a fixed sample over /v1/tts/stream, and play
+   * the result in this editor's own <forge-waveform>. Mirrors
+   * forge-serve-console._run — it owns its synth, its waveform, and its
+   * forging flag the same way.
+   */
+  _runAudition() {
+    const voice = this._voiceId();
+    if (!voice) return;
+
+    // Cancel/replace: abort the previous socket so only the newest take plays.
+    if (this._audHandle) this._audHandle.abort();
+
+    const wave = this.$("forge-waveform");
+    const status = this.$(".audition-status");
+    const setStatus = (state, text) => {
+      if (!status) return;
+      status.dataset.state = state;
+      status.textContent = text || "";
+    };
+
+    // A synth IS in flight → run the focused card/anvil hot. forge-waveform
+    // playback itself never writes forging; this audition legitimately does.
+    store.set({ forging: true });
+    setStatus("busy", "…");
+
+    const handle = auditionVoice(voice, this._overrides());
+    this._audHandle = handle;
+
+    handle.promise
+      .then(({ samples, sampleRate }) => {
+        if (this._audHandle !== handle) return; // a newer audition superseded us
+        if (wave) {
+          wave.setPcm(samples, sampleRate); // true peaks + auto-WAV for playback
+          wave.play?.();
+        }
+        setStatus("idle", "");
+      })
+      .catch((e) => {
+        if (e.reason === "aborted") return; // replaced by a newer release — stay silent
+        if (this._audHandle !== handle) return;
+        setStatus("error", e.reason === "timeout" ? "timed out" : "failed");
+      })
+      .finally(() => {
+        // Only the LATEST handle clears the global hot state. An aborted older
+        // handle must NOT clear forging — the newer audition still owns it.
+        if (this._audHandle === handle) {
+          this._audHandle = null;
+          store.set({ forging: false });
+        }
+      });
+  }
+
+  /** Abort any in-flight audition and un-stick `forging` if this editor owned it. */
+  _teardownAudition() {
+    if (!this._audHandle) return;
+    this._audHandle.abort();
+    this._audHandle = null;
+    if (store.get("forging")) store.set({ forging: false });
+  }
+
   bind() {
+    // A re-render (new focused voice / registry reload) replaced #root and
+    // orphaned any old socket — refresh() rebuilds the DOM but does NOT call
+    // disconnectedCallback. Abort the orphan here so it can't play into a chip
+    // that no longer exists or leave the anvil stuck hot.
+    this._teardownAudition();
+
     // Sliders: live fill/readout while dragging; audition on thumb-release.
     for (const input of this.$$("input[data-knob-input]")) {
       const knob = input.closest(".knob");
@@ -247,11 +357,16 @@ class ForgeSpecEditor extends ForgeElement {
       // change fires on thumb-release / keyboard commit — the audition trigger.
       input.onchange = () => {
         paint();
-        this._audition({ sampling: this._overrides() });
+        this._runAudition(); // (B): own the synth locally — play it in our chip
+        this._audition({ sampling: this._overrides() }); // keep the shell seam open
       };
     }
 
-    // Description: ~600ms debounced pause re-auditions with the new words.
+    // Description: ~600ms debounced pause emits a forge-audition {description}
+    // for the shell to log. Re-describing is a DESIGN op (ElevenLabs text→voice)
+    // with no request-scope synth path — out of scope for U9, so this is
+    // EVENT-ONLY. Do NOT open a WS here (no _runAudition); the editor only
+    // auditions sampling, which the slider path above owns.
     const desc = this.$("#desc");
     if (desc) {
       desc.oninput = () => {

@@ -56,11 +56,17 @@ class ForgeApp extends ForgeElement {
     this.addEventListener("forge-design", (e) => this._onDesign(e.detail));
     this.addEventListener("forge-pick", (e) => this._onPick(e.detail?.candidate));
 
-    // OUT OF SCOPE (U9): forge-audition (spec-editor tuning of a kept take → re-synth)
-    // stays UNWIRED — the contact sheet emits only forge-pick; there is no
-    // forge-audition emitter yet. And the serve-console run (forge-serve) is its
-    // own unit. Stubbed as a logged no-op so the event is caught at the host —
-    // not silently swallowed — and the next unit has an obvious seam to fill.
+    // U9: forge-audition {voice, sampling?|description?}. The spec-editor OWNS
+    // the sampling audition end to end (opens its own WS to /v1/tts/stream,
+    // plays the take in its own <forge-waveform>, manages store.forging) —
+    // mirroring forge-serve-console._run. This host handler is the OPEN SEAM for
+    // future host-level listeners (telemetry, a global "auditioning" indicator)
+    // and for routing the {description} variant into the design flow later. It
+    // MUST NOT open a WS — that would double-synth against the editor's audition.
+    this.addEventListener("forge-audition", (e) => this._onAudition(e.detail));
+
+    // The serve-console run (forge-serve) is its own unit. Caught here so it
+    // isn't silently dropped; intentionally a logged no-op in this slice.
     this.addEventListener("forge-serve", (e) => this._onServe(e.detail));
   }
 
@@ -302,9 +308,16 @@ class ForgeApp extends ForgeElement {
     return base; // 999 collisions is absurd — let the server 409 if it ever happens
   }
 
-  // OUT OF SCOPE (U9 / serve unit) — forge-audition has no emitter yet, and the
-  // serve-console run is its own unit. Caught here so forge-serve isn't silently
-  // dropped; intentionally not implemented in this slice.
+  // forge-audition {voice, sampling?|description?}: the spec-editor already ran
+  // the sampling audition locally (fork B) and played it in its own waveform.
+  // This is the host seam — logged, not re-run. The {description} variant is a
+  // DESIGN op (re-describe), out of scope for U9; surfaced here, not executed.
+  _onAudition(detail) {
+    console.info("forge-audition received (editor owns sampling audition)", detail);
+  }
+
+  // The serve-console run is its own unit. Caught here so forge-serve isn't
+  // silently dropped; intentionally not implemented in this slice.
   _onServe(detail) {
     console.info("forge-serve received (serve flow not wired yet)", detail);
   }
