@@ -22,6 +22,11 @@ const _state = {
   density: localStorage.getItem("forge-density") || "calm",
   // is anything synthesizing right now? (drives the ember "hot" signal)
   forging: false,
+  // transient audition set (POST /v1/forge/design → []); non-empty swaps the
+  // subject to <forge-contact-sheet>. Cleared on pick/cancel. NOT a registry
+  // slice. Always set a FRESH array (store.set's identity check, line 38, will
+  // not notify on a re-set of the same reference) so the subject swap fires.
+  candidates: [],
 };
 
 const _subs = new Set();

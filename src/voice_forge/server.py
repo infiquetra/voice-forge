@@ -186,6 +186,32 @@ def _is_backend_installed(name: str) -> bool:
         return False
 
 
+def _require_elevenlabs() -> str:
+    """Return the EL API key, or raise a clean 503 with how-to-enable.
+
+    NEVER a 500. Mirrors ``capabilities.elevenlabs_configured`` so the gate the
+    Forge UI probes and the gate the endpoints enforce are the same signal.
+
+    Gate-first is load-bearing: the two elevenlabs modules raise *different*
+    exceptions when no key is configured (``voice_design`` → ``RuntimeError``,
+    ``voice_lab`` → ``ValueError``), and FastAPI would surface a bare
+    ``RuntimeError`` as a 500. Pre-checking here guarantees a 503 on the
+    no-key path before any call reaches those modules.
+    """
+    key = os.environ.get("ELEVENLABS_API_KEY")
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ElevenLabs Voice Design is not configured. Set the "
+                "ELEVENLABS_API_KEY environment variable and restart "
+                "voice-forge to enable design-from-description. "
+                "(Local design model #60 not yet shipped.)"
+            ),
+        )
+    return key
+
+
 # ----- Schemas -----
 
 
@@ -256,6 +282,76 @@ class FromElevenLabsRequest(BaseModel):
     auto_trim: bool = True
     language: str = "en"
     overwrite: bool = False
+
+
+# Default sentence the design previews speak so candidates are comparable.
+SAMPLE_TEXT_DEFAULT = (
+    "The quick brown fox jumps over the lazy dog. "
+    "I can speak clearly across a range of expression."
+)
+
+
+class DesignRequest(BaseModel):
+    """POST /v1/forge/design — freeform description → N preview candidates."""
+
+    description: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Freeform voice description (EL Voice Design prompt)",
+    )
+    sample_text: str | None = Field(
+        default=None,
+        description="Sentence the previews speak; server default if omitted",
+    )
+    voice_id: str | None = Field(
+        default=None,
+        description="Intended final voice_id (echoed for client convenience)",
+    )
+    n: int | None = Field(
+        default=None,
+        ge=1,
+        le=5,
+        description="Desired candidate count (advisory; EL returns ~3)",
+    )
+
+
+class DesignCandidate(BaseModel):
+    generated_voice_id: str
+    audio: str = Field(
+        ..., description="data:audio/mpeg;base64,... — playable contact-sheet src"
+    )
+    label: str
+
+
+class DesignResponse(BaseModel):
+    candidates: list[DesignCandidate]
+    description: str  # echoed so /pick can carry it back
+    voice_name: str  # suggested name (== voice_id or a slug); client may override
+
+
+class PickRequest(BaseModel):
+    """POST /v1/forge/pick — persist one candidate as a BOUND voice-forge voice."""
+
+    generated_voice_id: str = Field(..., description="Ephemeral ID from /design candidate")
+    description: str = Field(
+        ..., description="Carried back from /design (EL voice_description)"
+    )
+    voice_id: str = Field(..., description="Final voice-forge registry id (born bound)")
+    voice_name: str | None = Field(
+        default=None, description="EL library name; defaults to voice_id"
+    )
+    persona: str | None = Field(default=None, description="Persona to bind at creation")
+    backend: str | None = Field(
+        default=None, description="Override; else U6/default inference"
+    )
+    accent_distinct: bool = Field(
+        default=False, description="Route via U6 infer_backend when backend omitted"
+    )
+    language: str = Field(default="en")
+    max_seconds: float = Field(default=14.0)
+    auto_trim: bool = Field(default=True)
+    overwrite: bool = Field(default=False)
 
 
 # ----- Helpers -----
@@ -864,6 +960,131 @@ async def pull_from_elevenlabs(req: FromElevenLabsRequest) -> VoiceInfo:
         )
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return VoiceInfo(
+        id=v.voice_id,
+        backend=v.backend,
+        persona=v.persona,
+        language=v.metadata.get("language"),
+        description=v.metadata.get("description"),
+        metadata=v.metadata,
+    )
+
+
+@app.post("/v1/forge/design", response_model=DesignResponse)
+async def forge_design(req: DesignRequest) -> DesignResponse:
+    """The Forge: freeform description → N preview candidates (ElevenLabs Voice Design).
+
+    Stateless: candidate MP3s are returned inline as ``data:audio/mpeg;base64,...``
+    URIs (no served temp files, no disk session). The client carries each
+    candidate's ``generated_voice_id`` back into ``POST /v1/forge/pick`` to persist
+    the chosen one — the ephemeral ID round-trips client-side, the API key never
+    leaves the server.
+    """
+    import base64
+
+    api_key = _require_elevenlabs()  # gate FIRST → clean 503, never 500
+
+    from .voice_design.elevenlabs import ElevenLabsError, create_voice_previews
+
+    sample_text = req.sample_text or SAMPLE_TEXT_DEFAULT
+    try:
+        previews = await run_in_threadpool(
+            create_voice_previews,
+            req.description,
+            sample_text,
+            api_key=api_key,
+        )
+    except ElevenLabsError as exc:
+        raise HTTPException(status_code=502, detail=f"ElevenLabs design failed: {exc}") from exc
+
+    candidates = [
+        DesignCandidate(
+            generated_voice_id=p.generated_voice_id,
+            audio="data:audio/mpeg;base64," + base64.b64encode(p.audio).decode("ascii"),
+            label=f"Candidate {i}",
+        )
+        for i, p in enumerate(previews, start=1)
+    ]
+    return DesignResponse(
+        candidates=candidates,
+        description=req.description,
+        voice_name=req.voice_id or "designed-voice",
+    )
+
+
+@app.post("/v1/forge/pick", response_model=VoiceInfo, status_code=201)
+async def forge_pick(req: PickRequest) -> VoiceInfo:
+    """The Forge: persist a chosen design candidate as a BOUND voice-forge voice.
+
+    Three-step chain, born bound: persist the ephemeral preview → permanent EL
+    voice (``create_voice_from_preview``), pull a ref WAV from that EL voice (the
+    same ``pull_and_prepare`` pipeline ``/voices/from-elevenlabs`` uses), then
+    register it with persona + design provenance in metadata. Backend is the
+    explicit override, else U6 inference, else the system default.
+    """
+    api_key = _require_elevenlabs()  # gate FIRST → clean 503, never 500
+
+    from .voice_design.elevenlabs import ElevenLabsError, create_voice_from_preview
+    from .voice_lab.elevenlabs import pull_and_prepare
+
+    # 1. Persist the chosen preview → permanent EL voice_id.
+    try:
+        el_voice_id = await run_in_threadpool(
+            create_voice_from_preview,
+            req.voice_name or req.voice_id,  # voice_name
+            req.description,  # description
+            req.generated_voice_id,  # generated_voice_id
+            api_key=api_key,
+        )
+    except ElevenLabsError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"ElevenLabs persist failed: {exc}"
+        ) from exc
+
+    # 2. Pull a ref WAV from that EL voice (same pipeline pull_from_elevenlabs uses).
+    trim = req.max_seconds if req.auto_trim else None
+    try:
+        wav_path, ref_text = await run_in_threadpool(
+            pull_and_prepare,
+            el_voice_id,
+            api_key,
+            trim,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # 3. Pick backend: explicit override → U6 inference → default.
+    if req.backend:
+        backend = req.backend
+    else:
+        installed = [name for name in known_backends() if _is_backend_installed(name)]
+        backend, _why = infer_backend(
+            accent_distinct=req.accent_distinct,
+            installed=installed,
+            default=config.get_default_backend(),
+        )
+
+    # 4. Register — BOUND at creation (persona + design provenance in metadata).
+    registry = _registry()
+    meta = {
+        "language": req.language,
+        "description": req.description,
+        "source": f"elevenlabs-design:{el_voice_id}",
+    }
+    if req.persona:
+        meta["persona"] = req.persona
+    try:
+        v = registry.register(
+            voice_id=req.voice_id,
+            ref_audio_path=wav_path,
+            ref_text=ref_text,
+            backend=backend,
+            metadata=meta,
+            overwrite=req.overwrite,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,

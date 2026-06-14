@@ -29,7 +29,9 @@ class ForgeApp extends ForgeElement {
   // Not "forging": the shell renders nothing off it (cards + hero own their own
   // hot face), and re-rendering the whole fleet on every synth would needlessly
   // rebuild every card — and tear down any take playing inside one.
-  static observe = ["voices", "backends", "density", "focused"];
+  // "candidates" IS observed: a non-empty audition set swaps the subject to the
+  // contact sheet (render() branch), so the shell must re-paint when it opens/closes.
+  static observe = ["voices", "backends", "density", "focused", "candidates"];
 
   connectedCallback() {
     super.connectedCallback();
@@ -48,12 +50,17 @@ class ForgeApp extends ForgeElement {
     this.addEventListener("forge-clone", (e) => this._onClone(e.detail?.file));
     this.addEventListener("forge-backend-change", (e) => this._onBackendChange(e.detail?.backend));
 
-    // OUT OF SCOPE for this slice: design → contact-sheet → audition → pick, and
-    // the serve console run. Those belong to the design/audition unit that
-    // introduces their flow (and, for pick/audition, their emitters). Stubbed as
-    // logged no-ops so the event is caught at the host — not silently swallowed —
-    // and the next unit has an obvious seam to fill.
+    // U8 design path: describe → N candidate takes (forge-design) → cull on the
+    // contact sheet → keep one (forge-pick) → bound voice. Both emitters bubble +
+    // composed, so they re-target here regardless of which re-rendered child fired.
     this.addEventListener("forge-design", (e) => this._onDesign(e.detail));
+    this.addEventListener("forge-pick", (e) => this._onPick(e.detail?.candidate));
+
+    // OUT OF SCOPE (U9): forge-audition (spec-editor tuning of a kept take → re-synth)
+    // stays UNWIRED — the contact sheet emits only forge-pick; there is no
+    // forge-audition emitter yet. And the serve-console run (forge-serve) is its
+    // own unit. Stubbed as a logged no-op so the event is caught at the host —
+    // not silently swallowed — and the next unit has an obvious seam to fill.
     this.addEventListener("forge-serve", (e) => this._onServe(e.detail));
   }
 
@@ -138,13 +145,166 @@ class ForgeApp extends ForgeElement {
     }
   }
 
-  // OUT OF SCOPE — these belong to the design/audition unit (the flow + the
-  // pick/audition emitters land there). Caught here so they aren't silently
-  // dropped; intentionally not implemented in this slice.
-  _onDesign(detail) {
-    console.info("forge-design received (design flow not wired yet)", detail);
+  // forge-design {description}: text → N candidate takes. POST /v1/forge/design,
+  // run the anvil hot during the call, and on success populate store.candidates —
+  // the subject swaps to <forge-contact-sheet> (render() branch). The hero already
+  // gates describe behind capabilities, but a key can be revoked between the
+  // capability probe and this click — handle the 503 race without a dead UI.
+  async _onDesign(detail) {
+    const description = (detail?.description || "").trim();
+    if (!description) return;
+
+    store.set({ forging: true });
+    try {
+      const res = await fetch("/v1/forge/design", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // Map the response → the contact sheet's candidate shape. Stash the
+        // keep-context (the prompt + server-suggested name) for the pick body —
+        // on the instance, not the store (the store holds only what renders).
+        const candidates = this._toCandidates(data);
+        this._auditionCtx = {
+          description: data?.description || description,
+          voice_name: data?.voice_name || null,
+        };
+        // Fresh array so the store's identity check (store.js:38) fires the swap.
+        store.set({ candidates, forging: false });
+      } else {
+        // Non-2xx (e.g. 503 = the design path is gone, key revoked since the
+        // capability probe; or 502 = ElevenLabs failed). Un-stick the anvil and
+        // surface it. candidates stays [], so the subject remains the hero, not a
+        // blank sheet — no dead UI. On a gate failure, re-probe capabilities so
+        // the hero re-gates the describe box if the key is truly gone.
+        store.set({ forging: false });
+        this._noteError(res);
+        if (res.status === 503) await this._load();
+      }
+    } catch (err) {
+      store.set({ forging: false });
+      this._noteError(err);
+    }
   }
 
+  // forge-pick {candidate}: keep the chosen take and bind it to a voice card.
+  // POST /v1/forge/pick with the candidate's generated_voice_id (carried as
+  // candidate.id) + the design context, then clear the audition, _load(), and
+  // focus the new bound voice so it lands focused in the fleet/inspector.
+  async _onPick(candidate) {
+    if (!candidate) return;
+    const ctx = this._auditionCtx || {};
+    const description = ctx.description || "";
+    // The server REQUIRES a final registry voice_id (PickRequest.voice_id is
+    // mandatory — the BOUND id, not a server-minted one). The design flow gives
+    // no name: the hero collects only a prompt and the server's voice_name
+    // defaults to the generic "designed-voice" (so every design would collide on
+    // that id). candidate.label is just an ordinal take # ("Candidate 2"), not a
+    // name either. Derive a readable name from the prompt's leading words (drop a
+    // leading article), then make the id unique against the current fleet.
+    const named = ctx.voice_name && ctx.voice_name !== "designed-voice" ? ctx.voice_name : "";
+    // First ~3 descriptive words of the prompt, sans a leading article, with
+    // per-word punctuation stripped ("a warm, gravelly narrator — …" →
+    // "warm gravelly narrator"). Commas inside the phrase must NOT truncate it.
+    const seed =
+      (named || description)
+        .replace(/^\s*(a|an|the)\s+/i, "")
+        .split(/\s+/)
+        .map((w) => w.replace(/[^\w']/g, ""))
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(" ") || "designed voice";
+    const persona = this._titleCase(seed);
+    const voiceId = this._uniqueVoiceId(this._slugify(seed) || "designed-voice");
+
+    store.set({ forging: true });
+    try {
+      const res = await fetch("/v1/forge/pick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          generated_voice_id: candidate.id, // candidate id == server generated_voice_id
+          description,
+          voice_id: voiceId, // REQUIRED — the final BOUND registry id
+          persona,
+        }),
+      });
+
+      if (res.ok) {
+        const voice = await res.json(); // VoiceInfo-shaped; carries the bound id
+        const boundId = voice?.id || voice?.voice_id || voiceId;
+        // Close the audition FIRST (fresh [] so the swap fires), then reload the
+        // registry and focus the new card. Order matters: clearing candidates
+        // swaps the subject off the sheet; _load() repaints the fleet with the
+        // new bound voice; focused pins it in the rail + inspector.
+        store.set({ candidates: [], forging: false });
+        this._auditionCtx = null;
+        await this._load();
+        store.set({ focused: boundId });
+      } else {
+        // e.g. 409 name collision, 502 EL persist failure. Keep the sheet up so
+        // the user can pick again; un-stick the anvil and surface why.
+        store.set({ forging: false });
+        this._noteError(res);
+      }
+    } catch (err) {
+      store.set({ forging: false });
+      this._noteError(err);
+    }
+  }
+
+  // Map the /v1/forge/design response → the contact sheet's candidate shape.
+  // The sheet's setter (forge-contact-sheet.js:51) reads {id, src, pcm, sampleRate,
+  // label, silent}; everything else it ignores. The real server returns
+  // {candidates:[{generated_voice_id, audio, label}], description, voice_name},
+  // where `audio` is a directly-playable data:audio/mpeg;base64,... URI — that's
+  // the sheet's `src`. Fallbacks (data/takes, url/audio_url) are defensive only.
+  _toCandidates(data) {
+    const list = Array.isArray(data)
+      ? data
+      : data?.candidates || data?.data || data?.takes || [];
+    return list.map((t, i) => ({
+      // candidate.id IS the server's generated_voice_id — the pick body sends it
+      // straight back as generated_voice_id.
+      id: t.generated_voice_id || t.id || `take-${i}`,
+      // the playable take: the server's data:-URI `audio`, else a plain URL.
+      src: t.audio || t.src || t.url || t.audio_url || null,
+      label: t.label || t.persona || `Take ${i + 1}`,
+      pcm: t.pcm || null, // optional float32 frame for the flat-line proof
+      silent: t.silent === true || undefined, // let _prep derive from pcm if absent
+    }));
+  }
+
+  // Filename/name → registry-safe voice_id slug (mirrors _onClone's derivation).
+  _slugify(s) {
+    return String(s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  // Words → a human-readable name ("warm gravelly narrator" → "Warm Gravelly Narrator").
+  _titleCase(s) {
+    return String(s || "").trim().replace(/\b\w/g, (c) => c.toUpperCase()) || "Designed Voice";
+  }
+
+  // Make a voice_id unique against the current fleet so repeat designs don't
+  // collide on the server (409). Appends -2, -3, … on collision.
+  _uniqueVoiceId(base) {
+    const taken = new Set((store.get("voices") || []).map((v) => v.voice_id || v.id));
+    if (!taken.has(base)) return base;
+    for (let i = 2; i < 1000; i++) {
+      if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
+    }
+    return base; // 999 collisions is absurd — let the server 409 if it ever happens
+  }
+
+  // OUT OF SCOPE (U9 / serve unit) — forge-audition has no emitter yet, and the
+  // serve-console run is its own unit. Caught here so forge-serve isn't silently
+  // dropped; intentionally not implemented in this slice.
   _onServe(detail) {
     console.info("forge-serve received (serve flow not wired yet)", detail);
   }
@@ -254,8 +414,17 @@ class ForgeApp extends ForgeElement {
         <ul>${voices.map((v) => this._railItem(v, focused)).join("")}</ul>
       </aside>`;
 
+    // A live audition wins the subject: a non-empty candidates set swaps in the
+    // contact sheet over both the hero and the fleet. The sheet takes its set via
+    // a PROPERTY, set on the live element in bind() (a static tag here, no
+    // untrusted text — see esc note in bind()).
+    const candidates = store.get("candidates") || [];
     const subject = `<section class="subject">${
-      voices.length === 0 ? this._hero() : this._fleet(voices)
+      candidates.length
+        ? `<forge-contact-sheet></forge-contact-sheet>`
+        : voices.length === 0
+          ? this._hero()
+          : this._fleet(voices)
     }</section>`;
 
     const inspector = `<aside class="inspector">${this._inspector(voices, focused)}</aside>`;
@@ -305,6 +474,19 @@ class ForgeApp extends ForgeElement {
     }
     for (const el of this.$$("[data-voice]")) {
       el.onclick = () => store.set({ focused: el.dataset.voice });
+    }
+
+    // The contact sheet takes its audition set via a PROPERTY (not an attribute),
+    // so it can't ride the render string — set it on the live element after each
+    // paint. _paint() (base.js:45) rebuilt the subject's innerHTML this render,
+    // replacing the element; it's a defined custom element so it's already
+    // upgraded and its setter (forge-contact-sheet.js:39) exists. The setter
+    // normalizes + refresh()es. Guard on reference so a shell re-paint mid-
+    // audition (e.g. a density toggle) doesn't reset the user's cull state.
+    const sheet = this.$("forge-contact-sheet");
+    if (sheet) {
+      const list = store.get("candidates") || [];
+      if (sheet.candidates !== list) sheet.candidates = list;
     }
   }
 }
