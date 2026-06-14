@@ -283,7 +283,9 @@ def download_preview(voice: SharedVoice, out_path: Path) -> Path:
     from urllib.request import Request, urlopen  # noqa: PLC0415
 
     req = Request(voice.preview_url, headers={"User-Agent": "voice-forge"})
-    with urlopen(req, timeout=30) as resp:  # noqa: S310 — URL is from ElevenLabs API
+    with urlopen(
+        req, timeout=30
+    ) as resp:  # noqa: S310  # nosec B310 — preview_url is an https GCS link from the ElevenLabs API
         data = resp.read()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(data)

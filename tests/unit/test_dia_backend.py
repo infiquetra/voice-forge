@@ -11,7 +11,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tests._stubs.fake_dialib import install as install_fake_dia
+# The fake dia lib + the Dia backend import torch; CI installs no backend extras,
+# so skip the whole module when torch is absent rather than erroring at collection.
+pytest.importorskip("torch")
+
+from tests._stubs.fake_dialib import install as install_fake_dia  # noqa: E402
 
 
 @pytest.fixture

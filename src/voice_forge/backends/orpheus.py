@@ -203,7 +203,7 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
                 dtype,
             )
 
-            self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self._tokenizer = AutoTokenizer.from_pretrained(model_name)  # nosec B615 — pinned repo
             self._model = AutoModelForCausalLM.from_pretrained(  # nosec B615 — pinned repo
                 model_name,
                 torch_dtype=dtype,

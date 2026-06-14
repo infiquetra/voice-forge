@@ -25,6 +25,28 @@
 
 ---
 
+## 2026-06-14 (CI baseline — the pre-existing red was an unwinnable linter-version war)
+
+### Unpinned linters in `[dev]` drift ahead of the pinned pre-commit revs, so the named gate and the pre-commit gate format the same file two different ways — CI can never be green
+
+**Context.** `main`'s CI had been red for its last several runs (13–15s, failing in the lint phase). Reproduced the exact CI env (`uv venv` + `uv pip install -e ".[dev]"`, then the verbatim `ci.yml` commands) rather than inferring from a hand-assembled venv. Found the lint gates and the pre-commit gate disagreeing on one file with no formatting a human could write to satisfy both.
+
+**Evidence.** `.github/workflows/ci.yml` runs two black gates in one job: a named "Format check with black" step (`black --check src tests scripts`, using the `[dev]`-installed black) **and** a "Pre-commit hooks" step (`pre-commit run --all-files`, using the black pinned in `.pre-commit-config.yaml`). `[dev]` had `black>=24.0` (open upper bound) so `uv pip install` resolved **black 26.5.1**; the pre-commit hook pinned **black 24.10.0**. On `tests/unit/test_subprocess_backend.py`, 26.x hugs a single `textwrap.dedent("""\…""")` string onto one line while 24.10.0 keeps the `"""\` on its own line — so whichever way the file is written, one of the two black gates fails. Same latent trap for `ruff>=0.4`/`mypy>=1.10`/`bandit>=1.7` vs the pinned ruff 0.7.4 / mypy 1.13.0 / bandit 1.8.0 (those happened to still agree, so only black was actively red). Separately, the pre-commit `end-of-file-fixer` hook failed CI on 7 tracked files (6 `personas/asgard/*/ref.txt` + `tests/functional/voice_scorecard.json`) that shipped without a trailing newline — a hook that *modifies* files fails the run.
+
+**Mechanism.** A repo that runs its linters in BOTH a named CI step (tool from the package's own dependency set) and a pre-commit step (tool from a pinned hook rev) has two independent version sources for the same tool. If one floats and the other is pinned, a routine upstream release (black 24→26) silently moves the floating one ahead, and the two gates impose contradictory requirements on the same bytes. No edit satisfies both; the only fix is to make the two version sources identical.
+
+**Fix.** Pinned the four lint/format tools in `[dev]` to the exact pre-commit-hook versions (`ruff==0.7.4`, `mypy==1.13.0`, `black==24.10.0`, `bandit==1.8.0`) with a comment to bump them and the pre-commit `rev:`s together. Also: completed the `[tool.mypy.overrides]` ignore-missing-imports list for every optional backend (CI runs `mypy src` with no backend extras), added `httpx>=0.27` to `[dev]` (FastAPI `TestClient` needs it; absent → every TestClient test errored at collection in CI), object→`Any` on higgs.py's lazy model holders + `# nosec` on pinned `from_pretrained` calls (higgs/orpheus B615) + the elevenlabs urlopen (B310), `pytest.importorskip("torch")` on the dia backend test (no backend extras in CI), the UP038 `isinstance(x, bytes | bytearray)` fix, and let `end-of-file-fixer` add the 7 missing trailing newlines. (This commit — the `fix(ci)` baseline fix.)
+
+**Validation.** Blew away `.ci-venv`, recreated it the CI way (`uv venv` + `uv pip install -e ".[dev]"`), confirmed the fresh resolve installs exactly 0.7.4 / 24.10.0 / 1.13.0 / 1.8.0, then ran all six gates with the verbatim `ci.yml` commands: ruff/black/mypy/bandit/pre-commit all exit 0, pytest 324 passed / 5 skipped. (Real-CI green to be confirmed on push.)
+
+**What surprised.** `bandit -ll` (CI's actual command) filters Low severity, but a bare `bandit -r src` does not — running the wrong invocation showed 8 High + 2 Medium and exit 1, which looked like a real failure until diffed against the exact CI command. The lesson reinforced itself: reproduce the *verbatim* command, not a plausible equivalent.
+
+**Generalizable rule.** (a) If a linter runs in both a named CI step and a pre-commit hook, the two MUST resolve to the same version — pin the `[dev]`/requirements tool to the pre-commit `rev`, or the next upstream release makes CI unwinnable. Floating linter versions are a latent main-breaker, not a convenience. (b) Reproduce CI failures with the byte-exact command and a from-scratch env install; a hand-built venv or a "close enough" flag (`bandit` with/without `-ll`) manufactures phantom failures or hides real ones. (c) `node --check`-style "it parses" and "it passed locally" are both weaker than "a clean CI-equivalent build ran the verbatim gate and exited 0."
+
+**Refs.** `.github/workflows/ci.yml`, `.pre-commit-config.yaml`, `pyproject.toml [project.optional-dependencies] dev`; same "verify the verbatim thing, don't assert a plausible equivalent" theme as the bounded-workflow + API-envelope LEARNINGS below.
+
+---
+
 ## 2026-06-14 (The Forge — two no-build-component traps + the capstone review)
 
 ### `node --check` passes corrupt template literals; and dispatch-then-mutate loses the event when the mutation re-renders you
