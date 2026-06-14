@@ -192,3 +192,25 @@ class Registry:
             meta["sampling"] = existing
         meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
         return _load_voice(voice_dir)
+
+    def set_persona(self, voice_id: str, persona: str | None) -> VoiceRef:
+        """Bind a voice to a persona (1:1) by writing ``metadata['persona']``.
+
+        Mirrors :meth:`tune`'s metadata-block write. ``persona=None`` (or empty)
+        clears the *explicit* binding, reverting to the derived persona
+        (:func:`_derive_persona`) — so the existing fleet's derived personas are
+        never disturbed; only the explicit override is added or removed.
+
+        Raises KeyError if the voice is missing.
+        """
+        voice_dir = _voice_dir(self.root, voice_id)
+        if not voice_dir.exists():
+            raise KeyError(f"voice not in registry: {voice_id!r}")
+        meta_path = voice_dir / "metadata.json"
+        meta = json.loads(meta_path.read_text())
+        if persona:
+            meta["persona"] = persona
+        else:
+            meta.pop("persona", None)
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+        return _load_voice(voice_dir)

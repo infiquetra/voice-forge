@@ -207,6 +207,21 @@ class VoicesList(BaseModel):
     data: list[VoiceInfo]
 
 
+class PersonaBindRequest(BaseModel):
+    """PUT body for /voices/{id}/persona. ``None``/empty clears the explicit binding."""
+
+    persona: str | None = None
+
+
+class PersonaGroup(BaseModel):
+    persona: str
+    voices: list[str]
+
+
+class PersonaList(BaseModel):
+    personas: list[PersonaGroup]
+
+
 class FromElevenLabsRequest(BaseModel):
     voice_id: str
     elevenlabs_voice_id: str
@@ -674,9 +689,15 @@ async def register_voice(
     backend: str | None = Form(default=None),
     language: str = Form(default="en"),
     description: str = Form(default=""),
+    persona: str | None = Form(default=None),
     overwrite: bool = Form(default=False),
 ) -> VoiceInfo:
-    """Register a new voice from an uploaded ref WAV."""
+    """Register a new voice from an uploaded ref WAV.
+
+    Pass ``persona`` to bind the voice to an agent persona at creation (the
+    canonical "forge a persona's voice" path); omit it to fall back to the
+    derived persona.
+    """
     # Save upload to a unique temp file. registry.register will copy it
     # into the canonical store, so we delete the temp in the finally
     # block — prevents /tmp from growing over the life of the process.
@@ -704,13 +725,16 @@ async def register_voice(
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         registry = _registry()
+        meta = {"language": language, "description": description}
+        if persona:
+            meta["persona"] = persona
         try:
             v = registry.register(
                 voice_id=voice_id,
                 ref_audio_path=tmp_path,
                 ref_text=ref_text,
                 backend=backend_resolved,
-                metadata={"language": language, "description": description},
+                metadata=meta,
                 overwrite=overwrite,
             )
         except FileExistsError as exc:
@@ -718,6 +742,7 @@ async def register_voice(
         return VoiceInfo(
             id=v.voice_id,
             backend=v.backend,
+            persona=v.persona,
             language=v.metadata.get("language"),
             description=v.metadata.get("description"),
             metadata=v.metadata,
@@ -775,6 +800,41 @@ async def delete_voice(voice_id: str):
     registry = _registry()
     registry.delete(voice_id)
     return Response(status_code=204)
+
+
+@app.put("/voices/{voice_id}/persona", response_model=VoiceInfo)
+async def bind_persona(voice_id: str, req: PersonaBindRequest) -> VoiceInfo:
+    """Bind a voice to a persona (1:1). ``persona: null`` clears the explicit binding.
+
+    The design->bind->serve seam: makes the persona a first-class, persisted
+    registry property instead of a fleet-file edit (the field existed but had no
+    setter). Persona names are not enforced globally unique in v1.
+    """
+    registry = _registry()
+    try:
+        v = registry.set_persona(voice_id, req.persona)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    return VoiceInfo(
+        id=v.voice_id,
+        backend=v.backend,
+        persona=v.persona,
+        language=v.metadata.get("language"),
+        description=v.metadata.get("description"),
+        metadata=v.metadata,
+    )
+
+
+@app.get("/v1/personas", response_model=PersonaList)
+async def list_personas() -> PersonaList:
+    """List personas and the voices bound to each (the persona-centric registry view)."""
+    registry = _registry()
+    groups: dict[str, list[str]] = {}
+    for v in registry.list():
+        groups.setdefault(v.persona, []).append(v.voice_id)
+    return PersonaList(
+        personas=[PersonaGroup(persona=p, voices=sorted(vs)) for p, vs in sorted(groups.items())]
+    )
 
 
 # ---- /lab persistence layer ----
