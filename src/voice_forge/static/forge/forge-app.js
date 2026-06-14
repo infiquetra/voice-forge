@@ -16,6 +16,15 @@
 import { ForgeElement, esc } from "./base.js";
 import { store, setDensity } from "./store.js";
 
+// Register the component layer (side-effect imports define the custom elements).
+import "./forge-waveform.js";
+import "./forge-voice-card.js";
+import "./forge-backend-chip.js";
+import "./forge-empty-hero.js";
+import "./forge-spec-editor.js";
+import "./forge-serve-console.js";
+import "./forge-contact-sheet.js";
+
 class ForgeApp extends ForgeElement {
   static observe = ["voices", "backends", "density", "focused", "forging"];
 
@@ -76,19 +85,13 @@ class ForgeApp extends ForgeElement {
       .hero p { color: var(--forge-text-dim); max-width: 38ch; margin: 0; line-height: 1.55; }
       .count { font-family: var(--forge-mono); color: var(--forge-text-faint); font-size: 12px; }
 
-      /* Fleet grid in the subject (Calm shows it here; Bench leans on the rail). */
+      /* Fleet grid in the subject (Calm shows it here; Bench leans on the rail).
+         Each cell is a self-contained <forge-voice-card>. */
       .fleet { padding: var(--forge-gap-lg); display: grid; gap: var(--forge-gap-sm); grid-template-columns: repeat(var(--forge-cols), minmax(0, 1fr)); align-content: start; }
-      .vcard { background: var(--forge-surface); border: 1px solid var(--forge-border); border-radius: var(--forge-radius); padding: var(--forge-card-pad); cursor: pointer; }
-      .vcard:hover { border-color: var(--forge-border-strong); }
-      .vcard[aria-selected="true"] { border-color: var(--forge-ember-edge); }
-      .vcard .vid { font-weight: 600; }
-      .vcard .vmeta { color: var(--forge-text-dim); font-size: 12px; margin-top: 4px; }
 
+      /* Inspector: the focused voice's bench — spec editor stacked over the serve console. */
       .inspector .empty { color: var(--forge-text-faint); font-size: 13px; padding: var(--forge-gap); }
-      .inspector .focused { padding: var(--forge-gap); }
-      .inspector .focused .vid { font-weight: 620; }
-      .inspector .focused dl { margin: 12px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; }
-      .inspector .focused dt { color: var(--forge-text-faint); }
+      .inspector .focused { padding: var(--forge-gap); display: flex; flex-direction: column; gap: var(--forge-gap); }
     `;
   }
 
@@ -96,9 +99,7 @@ class ForgeApp extends ForgeElement {
     const density = store.get("density");
     document.documentElement.dataset.density = density;
     const voices = store.get("voices") || [];
-    const backends = store.get("backends");
     const focused = store.get("focused");
-    const installed = backends && backends.backends ? backends.backends.filter((b) => b.installed).length : 0;
     const bench = density === "bench";
 
     const header = `
@@ -121,7 +122,7 @@ class ForgeApp extends ForgeElement {
       </aside>`;
 
     const subject = `<section class="subject">${
-      voices.length === 0 ? this._hero(installed) : this._fleet(voices, focused)
+      voices.length === 0 ? this._hero() : this._fleet(voices)
     }</section>`;
 
     const inspector = `<aside class="inspector">${this._inspector(voices, focused)}</aside>`;
@@ -135,38 +136,33 @@ class ForgeApp extends ForgeElement {
     return `<li data-voice="${id}" aria-selected="${id === focused}"><div class="vid">${id}</div><div class="vmeta">${persona}</div></li>`;
   }
 
-  _hero(installed) {
-    return `<div class="hero">
-      <div class="anvil">
-        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h12l-1 4H7"/><path d="M12 12v4"/><path d="M8 20h8"/><path d="M19 8h2v3a3 3 0 0 1-3 3"/></svg>
-      </div>
-      <h1>The forge is cold</h1>
-      <p>Forge your first voice — design one from a description or clone it from a clip, then bind it to an agent persona. ${installed} backend${installed === 1 ? "" : "s"} ready.</p>
-      <div class="count">empty registry · same surface, no data yet</div>
-    </div>`;
+  _hero() {
+    // The cold-start hero is its own component (U7): the capability-aware door
+    // (describe vs clone, gated by what's installed) over a cold forge that
+    // warms when the first voice lands. Self-contained — reads store itself and
+    // emits forge-design / forge-clone for the shell to route.
+    return `<forge-empty-hero></forge-empty-hero>`;
   }
 
-  _fleet(voices, focused) {
+  _fleet(voices) {
+    // Each voice is a self-contained <forge-voice-card>: it reads its own record
+    // from store.voices, paints its own face (ghost/forging/forged/bound), and
+    // sets store.focused on click — the shell only lays them out.
     return `<div class="fleet">${voices
-      .map((v) => {
-        const id = esc(v.voice_id || v.id || "");
-        const persona = esc(v.persona || "—");
-        const backend = esc(v.backend || "");
-        return `<div class="vcard" data-voice="${id}" aria-selected="${id === focused}"><div class="vid">${id}</div><div class="vmeta">${persona} · ${backend}</div></div>`;
-      })
+      .map((v) => `<forge-voice-card voice-id="${esc(v.voice_id || v.id || "")}"></forge-voice-card>`)
       .join("")}</div>`;
   }
 
   _inspector(voices, focused) {
     const v = voices.find((x) => (x.voice_id || x.id) === focused);
-    if (!v) return `<div class="empty">Select a voice to inspect it.</div>`;
+    if (!v) return `<div class="empty">Select a voice to tune and serve it.</div>`;
+    // The inspector is the focused voice's bench: its tunables spec sheet over
+    // the serve console. Both follow store.focused on their own — the
+    // voice-id attribute just pins this instance to the current subject.
+    const id = esc(v.voice_id || v.id || "");
     return `<div class="focused">
-      <div class="vid">${esc(v.voice_id || v.id || "")}</div>
-      <dl>
-        <dt>persona</dt><dd>${esc(v.persona || "—")}</dd>
-        <dt>backend</dt><dd>${esc(v.backend || "—")}</dd>
-        <dt>language</dt><dd>${esc(v.language || "—")}</dd>
-      </dl>
+      <forge-spec-editor voice-id="${id}"></forge-spec-editor>
+      <forge-serve-console></forge-serve-console>
     </div>`;
   }
 

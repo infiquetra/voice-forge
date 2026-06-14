@@ -36,10 +36,40 @@ def test_forge_index_serves(client: TestClient) -> None:
 
 @pytest.mark.parametrize(
     "asset",
-    ["forge-app.js", "tokens.css", "store.js", "base.js", "index.html"],
+    [
+        "forge-app.js",
+        "tokens.css",
+        "store.js",
+        "base.js",
+        "index.html",
+        # The component layer (U3/U4/U6–U10) — each ships as its own no-build module.
+        "forge-waveform.js",
+        "forge-voice-card.js",
+        "forge-backend-chip.js",
+        "forge-empty-hero.js",
+        "forge-spec-editor.js",
+        "forge-serve-console.js",
+        "forge-contact-sheet.js",
+    ],
 )
 def test_forge_assets_serve(client: TestClient, asset: str) -> None:
     assert client.get(f"/forge/{asset}").status_code == 200
+
+
+def test_shell_registers_component_layer() -> None:
+    # The shell must side-effect-import every component so the custom elements
+    # are defined when <forge-app> paints them — a missing import = a blank region.
+    shell = (FORGE_DIR / "forge-app.js").read_text(encoding="utf-8")
+    for component in (
+        "forge-waveform.js",
+        "forge-voice-card.js",
+        "forge-backend-chip.js",
+        "forge-empty-hero.js",
+        "forge-spec-editor.js",
+        "forge-serve-console.js",
+        "forge-contact-sheet.js",
+    ):
+        assert f'"./{component}"' in shell, f"shell does not import {component}"
 
 
 def test_legacy_lab_still_serves(client: TestClient) -> None:
