@@ -23,6 +23,22 @@
 
 ## 2026-06-14
 
+### Lint/format tools are pinned to the pre-commit hook revs, bumped in lockstep (commit a5e987f, merged 9ffc2c2)
+
+**Decision.** The four lint/format tools in `[project.optional-dependencies] dev` are pinned to the **exact** versions the pre-commit hooks use in `.pre-commit-config.yaml`: `ruff==0.7.4`, `mypy==1.13.0`, `black==24.10.0`, `bandit==1.8.0`. They are bumped together with the matching pre-commit `rev:`s (run `pre-commit autoupdate`, then mirror the new versions into `[dev]`), never independently. A comment in `pyproject.toml` records the rule at the edit site.
+
+**Rejected alternatives.**
+
+- **Leave the dev tools floating (`black>=24.0`, `ruff>=0.4`, …).** This was the prior state and the direct cause of the pre-existing-red CI: `ci.yml` runs each linter in *two* gates — a named step using the `[dev]`-installed tool (which floats to latest) and the pre-commit step using the pinned hook rev. black floated to 26.5.1 while the hook pinned 24.10.0; the two format `test_subprocess_backend.py` contradictorily, so no edit satisfies both and CI can never go green. Rejected — floating linters are a latent `main`-breaker, not a convenience.
+- **Bump the pre-commit `rev:`s up to match a floating dev (instead of pinning dev down).** Equivalent alignment, but leaves dev floating, so the next upstream release re-opens the same drift the moment pre-commit lags. Rejected in favor of pinning both sides to a single explicit version.
+- **Drop the named lint steps and run linting only through pre-commit (one version source).** Cleaner in principle, but the named steps give clearer per-gate CI logs and let contributors run `black`/`ruff` directly from `.[dev]`. Kept both gates; aligned their versions instead.
+
+**Rationale.** A tool that runs in both a named CI step and a pre-commit hook has two independent version sources for the same bytes; if they differ, the gates impose contradictory requirements and CI is unwinnable. Pinning both to one version makes the named gate, the pre-commit gate, and a contributor's local `.[dev]` tool byte-identical — deterministic, reproducible, and immune to a surprise upstream release silently breaking `main`. Verified: a from-scratch `uv pip install -e ".[dev]"` resolves exactly these versions and all six gates pass with the verbatim `ci.yml` commands (real GitHub CI green on main).
+
+**Revisit when.** A pinned linter has a security fix or a rule you need → bump it **and** its pre-commit `rev:` together in one commit. If the repo ever adopts a lockfile (`uv.lock`/`requirements.lock`) that fully determines linter versions across both gates, the hard `==` pins can relax back to ranges since the lock removes the drift.
+
+**Refs.** [LEARNINGS 2026-06-14 "Unpinned linters … unwinnable linter-version war"](LEARNINGS.md); `.github/workflows/ci.yml`, `.pre-commit-config.yaml`, `pyproject.toml [project.optional-dependencies] dev`; PR [#2](https://github.com/infiquetra/voice-forge/pull/2).
+
 ### voice-forge is a public-OSS local voice-forging studio — not personal infra, not a one-model server (STRATEGY.md)
 
 **Decision.** Two linked commitments, recorded while writing the root `STRATEGY.md`:
