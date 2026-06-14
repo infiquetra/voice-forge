@@ -240,3 +240,4 @@ __marimo__/
 .claude/context/
 .claude/checkpoints/
 .claude/jobs/
+.claude/saga/
