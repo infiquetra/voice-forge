@@ -12,12 +12,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
 from ..backends import VoiceRef
 
 DEFAULT_REGISTRY_PATH = "~/.voice-forge/voices"
+
+# A voice_id becomes a directory name under the registry root, so it MUST be a
+# safe slug. Without this, a body-supplied id like "../escape" or "/etc/x" (which
+# bypasses URL-path normalization) would let register()/set_*() write files
+# anywhere the server can — a path-traversal / arbitrary-write primitive. First
+# char alphanumeric; the rest [A-Za-z0-9._-]. Rejects "."/".."/slashes/empty.
+_VOICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _validate_voice_id(voice_id: str) -> str:
+    """Reject any voice_id that isn't a safe single-segment slug. Raises ValueError."""
+    if not isinstance(voice_id, str) or not _VOICE_ID_RE.match(voice_id):
+        raise ValueError(
+            f"invalid voice_id {voice_id!r}: must match {_VOICE_ID_RE.pattern} "
+            "(a single path-safe slug, no '/' or '..')"
+        )
+    return voice_id
 
 
 def _resolve_default_root() -> Path:
@@ -27,7 +45,13 @@ def _resolve_default_root() -> Path:
 
 
 def _voice_dir(root: Path, voice_id: str) -> Path:
-    """Per-voice directory inside the registry root."""
+    """Per-voice directory inside the registry root.
+
+    Validates the id first — this is the single chokepoint every per-voice op
+    (register/get/set_persona/set_backend/delete/tune) routes through, so the
+    traversal guard lives here and covers them all.
+    """
+    _validate_voice_id(voice_id)
     return root / voice_id
 
 

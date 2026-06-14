@@ -82,6 +82,7 @@ class ForgeServeConsole extends ForgeElement {
       .act { all: unset; cursor: pointer; font: inherit; font-size: 12px; color: var(--forge-text-dim); padding: 3px 10px; border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); }
       .act:hover { color: var(--forge-text); border-color: var(--forge-border-strong); }
       .act.run { color: var(--forge-ember); border-color: var(--forge-ember-edge); }
+      .act.run[data-failed="true"] { color: var(--forge-bad); border-color: var(--forge-bad); }
       pre { margin: 0; padding: 12px 14px; overflow-x: auto; font-family: var(--forge-mono); font-size: 12px; line-height: 1.55; color: var(--forge-text); }
       .foot { display: flex; align-items: center; gap: var(--forge-gap-sm); padding: 8px 10px; border-top: 1px solid var(--forge-border); }
       .empty { padding: 18px 14px; color: var(--forge-text-faint); font-size: 13px; }
@@ -148,6 +149,22 @@ class ForgeServeConsole extends ForgeElement {
     if (!v) return;
     const id = v.voice_id || v.id || "";
     const wave = this.$("forge-waveform");
+    const runBtn = this.$(".run");
+    // Surface a failure on the Run button directly (not via re-render — the
+    // console repaints on focus/voices and would wipe a flagged state). This is
+    // the canonical "call it from the API" path; a silent failure here reads as a
+    // dead button, so a failed Run must say so.
+    const fail = () => {
+      if (!runBtn) return;
+      runBtn.dataset.failed = "true";
+      runBtn.textContent = "✕ failed";
+      setTimeout(() => {
+        if (runBtn.isConnected) {
+          delete runBtn.dataset.failed;
+          runBtn.textContent = "▶ run";
+        }
+      }, 2500);
+    };
     store.set({ forging: true });
     try {
       const r = await fetch("/v1/audio/speech", {
@@ -160,14 +177,17 @@ class ForgeServeConsole extends ForgeElement {
           response_format: "wav",
         }),
       });
-      if (!r.ok) return;
+      if (!r.ok) {
+        fail();
+        return;
+      }
       const blob = await r.blob();
       if (wave) {
         wave.setAttribute("src", URL.createObjectURL(blob));
         wave.play?.();
       }
     } catch {
-      /* network/synth error — the run button just no-ops; nothing destructive */
+      fail(); // network/synth error — show it, don't leave a dead-feeling button
     } finally {
       store.set({ forging: false });
     }

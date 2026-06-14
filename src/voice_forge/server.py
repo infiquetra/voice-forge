@@ -308,17 +308,12 @@ class DesignRequest(BaseModel):
     )
     sample_text: str | None = Field(
         default=None,
+        max_length=500,  # bound the upstream EL payload, mirroring description's cap
         description="Sentence the previews speak; server default if omitted",
     )
     voice_id: str | None = Field(
         default=None,
         description="Intended final voice_id (echoed for client convenience)",
-    )
-    n: int | None = Field(
-        default=None,
-        ge=1,
-        le=5,
-        description="Desired candidate count (advisory; EL returns ~3)",
     )
 
 
@@ -850,6 +845,8 @@ async def get_voice(voice_id: str) -> VoiceInfo:
         v = registry.get(voice_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,
@@ -921,6 +918,8 @@ async def register_voice(
             )
         except FileExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return VoiceInfo(
             id=v.voice_id,
             backend=v.backend,
@@ -966,6 +965,8 @@ async def pull_from_elevenlabs(req: FromElevenLabsRequest) -> VoiceInfo:
         )
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,
@@ -1001,7 +1002,12 @@ async def forge_design(req: DesignRequest) -> DesignResponse:
             api_key=api_key,
         )
     except ElevenLabsError as exc:
-        raise HTTPException(status_code=502, detail=f"ElevenLabs design failed: {exc}") from exc
+        # Log the full upstream error server-side; return a generic detail so the
+        # client never sees ElevenLabs' raw response body (account/quota text).
+        logger.warning("ElevenLabs design failed: %s", exc)
+        raise HTTPException(
+            status_code=502, detail="ElevenLabs design failed (upstream error)"
+        ) from exc
 
     candidates = [
         DesignCandidate(
@@ -1043,8 +1049,9 @@ async def forge_pick(req: PickRequest) -> VoiceInfo:
             api_key=api_key,
         )
     except ElevenLabsError as exc:
+        logger.warning("ElevenLabs persist failed: %s", exc)
         raise HTTPException(
-            status_code=502, detail=f"ElevenLabs persist failed: {exc}"
+            status_code=502, detail="ElevenLabs persist failed (upstream error)"
         ) from exc
 
     # 2. Pull a ref WAV from that EL voice (same pipeline pull_from_elevenlabs uses).
@@ -1058,6 +1065,16 @@ async def forge_pick(req: PickRequest) -> VoiceInfo:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        # pull_and_prepare lazily imports Whisper for trim/transcribe; a missing
+        # extra must read as a clean 503, not an opaque 500 (gate-first discipline).
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Preparing the designed voice needs Whisper — "
+                f'pip install "voice-forge-tts[voice-lab]". ({exc})'
+            ),
+        ) from exc
 
     # 3. Pick backend: explicit override → U6 inference → default.
     if req.backend:
@@ -1090,6 +1107,8 @@ async def forge_pick(req: PickRequest) -> VoiceInfo:
         )
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return VoiceInfo(
         id=v.voice_id,
@@ -1122,6 +1141,8 @@ async def bind_persona(voice_id: str, req: PersonaBindRequest) -> VoiceInfo:
         v = registry.set_persona(voice_id, req.persona)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,
@@ -1151,6 +1172,8 @@ async def bind_backend(voice_id: str, req: BackendBindRequest) -> VoiceInfo:
         v = registry.set_backend(voice_id, req.backend)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,
@@ -1327,6 +1350,8 @@ async def get_voice_reference(voice_id: str) -> FileResponse:
         v = registry.get(voice_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not v.ref_audio_path or not Path(v.ref_audio_path).is_file():
         raise HTTPException(
             status_code=404,

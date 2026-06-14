@@ -37,7 +37,11 @@ class ForgeContactSheet extends ForgeElement {
 
   /** Imperative property: the audition set for this run. */
   set candidates(list) {
-    this._candidates = (Array.isArray(list) ? list : []).map((c, i) => this._prep(c, i));
+    // Remember the RAW reference so the shell can tell an incidental repaint (same
+    // store array) from a genuinely new audition set — assigning re-preps and
+    // resets the cull (_focus + _rejected), so it must only happen on a new set.
+    this._rawCandidates = Array.isArray(list) ? list : [];
+    this._candidates = this._rawCandidates.map((c, i) => this._prep(c, i));
     this._focus = 0;
     this._rejected.clear();
     this.refresh();
@@ -45,6 +49,11 @@ class ForgeContactSheet extends ForgeElement {
 
   get candidates() {
     return this._candidates;
+  }
+
+  /** The raw (un-prepped) array last assigned — the shell's repaint-guard key. */
+  get rawCandidates() {
+    return this._rawCandidates || null;
   }
 
   /** Normalise one candidate + decide silence up front (eye skips dead takes). */

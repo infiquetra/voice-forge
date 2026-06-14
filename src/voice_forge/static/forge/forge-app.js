@@ -93,7 +93,15 @@ class ForgeApp extends ForgeElement {
       // server falls back to the configured default on register anyway.
       let backend = "";
       try {
-        const inf = await fetch("/v1/forge/infer-backend").then((r) => (r.ok ? r.json() : null));
+        // accent_distinct=true: a cold-start clone clip is exactly where accent
+        // preservation matters, and diffusion CANNOT recover a lost accent (the
+        // journal rule U6 encodes). So prefer an LLM-backbone backend when one is
+        // installed — infer_backend degrades to the default when none is, and the
+        // user can always downgrade via the backend chip. (A one-tap "no distinct
+        // accent" toggle is a queued refinement.)
+        const inf = await fetch("/v1/forge/infer-backend?accent_distinct=true").then((r) =>
+          r.ok ? r.json() : null,
+        );
         backend = inf?.backend || "";
       } catch {
         backend = "";
@@ -285,6 +293,11 @@ class ForgeApp extends ForgeElement {
       src: t.audio || t.src || t.url || t.audio_url || null,
       label: t.label || t.persona || `Take ${i + 1}`,
       pcm: t.pcm || null, // optional float32 frame for the flat-line proof
+      // NOTE: ElevenLabs design candidates carry only a data:-URI (no pcm), so the
+      // sheet's auto silence-collapse pre-greying (forge-contact-sheet _peak) can
+      // never fire for them — it only protects the WS/pcm path. A designed take is
+      // greyed only if the server sets `silent`. Decoding peak from the data: URI
+      // is a queued refinement.
       silent: t.silent === true || undefined, // let _prep derive from pcm if absent
     }));
   }
@@ -321,10 +334,14 @@ class ForgeApp extends ForgeElement {
     console.info("forge-audition received (editor owns sampling audition)", detail);
   }
 
-  // The serve-console run is its own unit. Caught here so forge-serve isn't
-  // silently dropped; intentionally not implemented in this slice.
+  // forge-serve {id}: the bound card's "serve" button means "show me how to call
+  // this voice". The serve console lives in the inspector, which Calm density
+  // hides — so focus the voice (the card already did, but be explicit) and reveal
+  // the bench so the console is actually visible. The console follows store.focused.
   _onServe(detail) {
-    console.info("forge-serve received (serve flow not wired yet)", detail);
+    const id = detail?.id;
+    if (id) store.set({ focused: id });
+    if (store.get("density") !== "bench") setDensity("bench");
   }
 
   // Minimal error surface for this slice: log it, no new UI. A future unit adds a
@@ -506,7 +523,11 @@ class ForgeApp extends ForgeElement {
     const sheet = this.$("forge-contact-sheet");
     if (sheet) {
       const list = store.get("candidates") || [];
-      if (sheet.candidates !== list) sheet.candidates = list;
+      // Compare against the RAW reference the sheet last received — its
+      // .candidates getter returns a PREPPED copy that's never === the store
+      // array, so comparing that would re-assign (and wipe the cull) on every
+      // incidental repaint. rawCandidates === list means "same set, leave it".
+      if (sheet.rawCandidates !== list) sheet.candidates = list;
     }
   }
 }

@@ -219,7 +219,10 @@ class ForgeVoiceCard extends ForgeElement {
     if (serve) {
       serve.onclick = (e) => {
         e.stopPropagation();
-        store.set({ focused: id });
+        // Dispatch BEFORE any store mutation. Setting store.focused here would
+        // re-render the shell and detach THIS card, so a dispatch after it would
+        // fire from a detached node and never reach the host. The host's _onServe
+        // owns the response (focus the voice + reveal its serve console / bench).
         this.dispatchEvent(new CustomEvent("forge-serve", { detail: { id }, bubbles: true, composed: true }));
       };
     }
