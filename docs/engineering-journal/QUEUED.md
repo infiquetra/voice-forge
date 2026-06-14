@@ -18,6 +18,18 @@
 
 ---
 
+## P2 — Fine-grained component updates (don't rebuild the fleet on every focus)
+
+**Priority.** P2 — correctness is fine today; this is a scale + UX-polish refinement.
+
+**Effort.** Half-day.
+
+**Worth it when.** The fleet routinely exceeds ~30 voices (the maintainer's Asgard registry is already 45) and selection/synth feels janky, OR the "focus a different card stops the previously-playing take" behavior becomes annoying in real use.
+
+**Context.** The Forge's vanilla base class (`base.js`) replaces the whole `#root` `innerHTML` on any observed-store change (no virtual DOM / fine-grained reactivity — the deliberate no-build tradeoff). So `forge-app` observing `focused` rebuilds **every** `<forge-voice-card>` (each its own shadow DOM) on every selection, and a card observing `focused` re-renders itself — tearing down any `<forge-waveform>` playing inside it when you focus away. The 2026-06-14 self-destruct bug ([LEARNINGS](LEARNINGS.md)) was the acute case (fixed by not writing `forging` on playback); this is the residual structural cost. Options: (a) targeted host-attribute updates for `aria-selected` instead of a full re-render; (b) a `bind()`-only refresh path that patches attributes without replacing children; (c) keep the playing chip alive across re-renders by reusing the element. Don't add a framework — that breaks the no-build rule (R23).
+
+---
+
 ## P3 — MeloTTS install blocked on upstream packaging quality (arm64 macOS)
 
 **Priority.** P3 — gated by upstream. The voice-forge side is shipped + ready; what's blocked is the actual provisioning command.

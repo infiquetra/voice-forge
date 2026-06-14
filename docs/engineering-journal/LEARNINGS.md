@@ -25,6 +25,28 @@
 
 ---
 
+## 2026-06-14 (The Forge — first browser run of the new studio)
+
+### A no-build component studio built against an *assumed* API shape breaks the moment real data arrives — only serving it reveals it
+
+**Context.** Built the 7 `<forge-*>` components + shell over several units, all guarded by `node --check` + pytest endpoint/registry tests, all green. The first time the page was actually served (`voice-forge serve` → `/forge` in a browser) two bugs surfaced that every prior test had missed, because both only manifest at runtime against the real server contract.
+
+**Evidence.** Commit `39fa39f`, found via `mcp__Claude_Preview` driving `http://127.0.0.1:9876/forge/`. (1) `GET /v1/audio/voices` / `GET /v1/backends` return an OpenAI-style `{data:[…]}` envelope (server.py `VoicesList`/`BackendsList` at :206/:447; `VoiceInfo.id` at :198, `BackendInfo.{name,installed,is_default,tunables}` at :436) — the client assumed `{voices:[…]}` / `{backends:[…]}` and stored the raw envelope object as `store.voices`. With no backends installed the dev registry exposes `{data:[]}`, so the *empty* path looked fine; the fleet path was broken and unseen. (2) `forge-waveform._setPlaying` wrote `store.forging` on every play; the card and shell both `observe` `forging` and the vanilla base class replaces the whole `innerHTML` on any observed-key change → the playing `<forge-waveform>` was destroyed the instant it started.
+
+**Mechanism.** Bug 1: tests asserted *my* shape, never the server's — a closed loop. The `{data:[]}` empty-registry response is shape-compatible with "no voices" under either assumption, so the empty-state tests passed and hid the divergence. Bug 2: full-`innerHTML`-on-change reactivity means **any** store key a component observes is a re-render trigger that tears down that component's entire subtree; a child writing a parent-observed key is a self-destruct. `store.forging` was overloaded as both "synthesis in flight" (wanted: skeleton face) and "a take is playing" (unwanted side effect).
+
+**Fix.** Commit `39fa39f`. (1) One `asList()` normalizer in `base.js` at the `_load` boundary; consumers read a canonical bare array. (2) Playback is local (`refresh()` only, no store write); `forging` dropped from the shell's `observe`. Guards `test_load_normalizes_data_envelope` + `test_playback_does_not_trigger_global_rerender` lock both.
+
+**Validation.** Live browser run: empty registry → cold-forge hero, clone-primary + describe-gated door (AE1); synthetic loaded fleet → forged + bound faces, a 440Hz take that **plays and stays mounted** (`sameElement:true, playing:true`), spec-editor knobs from the real tunables schema, serve console with the live call. Zero console errors.
+
+**What surprised.** `node --check` + endpoint tests gave full green while the studio was unusable with real data. The empty-state passing is what made it *look* safe.
+
+**Generalizable rule.** (a) Test the **server's** response shape, not the client's assumption — pin a contract test to the real payload, and never trust an empty/degenerate response to validate a populated path. (b) Under full-innerHTML reactivity, a component must **never write a store key an ancestor observes** while it owns live imperative state (audio, focus, scroll) — that state lives outside the render and a re-render destroys it. Don't overload one signal for two meanings.
+
+**Refs.** [DECISIONS.md](DECISIONS.md) 2026-06-14 "The Forge v1"; work-session `docs/work-sessions/2026-06-14-the-forge.md`; QUEUED fine-grained-update refinement.
+
+---
+
 ## 2026-05-26 (evening — TTS architecture audit)
 
 ### F5-TTS cannot preserve heavy non-default accents — architectural ceiling, not a tunable
