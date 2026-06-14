@@ -5,8 +5,12 @@
  * store.voices and renders ONE of four faces by state:
  *   ghost   — no/placeholder data: a dashed "forge a voice" CTA (cold anvil).
  *   forging — store.forging is hot for THIS card: skeleton + ember heat-shimmer.
- *   forged  — name + a <forge-waveform> slot + a <forge-backend-chip> + persona.
+ *   forged  — name + a <forge-backend-chip> + language, marked unbound.
  *   bound   — forged + a persona chip + a small "serve" affordance.
+ *
+ * No waveform on the card: a voice at rest has no take to play (a VoiceInfo
+ * carries no audio). Takes are heard via the serve console's inline run-and-hear
+ * in the inspector — that's where <forge-waveform> is fed a real take.
  *
  * Clicking the card focuses it (store.focused = id); aria-selected reflects
  * focus so the rail, inspector, and serve console all follow the same subject.
@@ -68,7 +72,6 @@ class ForgeVoiceCard extends ForgeElement {
 
       .meta { color: var(--forge-text-dim); font-size: 12px; margin-top: 6px; display: flex; align-items: center; gap: var(--forge-gap-sm); flex-wrap: wrap; }
       .persona { color: var(--forge-text); }
-      forge-waveform { display: block; margin-top: 12px; }
 
       /* bound: a small "serve" affordance — present only once a persona is bound. */
       .serve {
@@ -140,9 +143,7 @@ class ForgeVoiceCard extends ForgeElement {
           } ${chip}</div>`
         : `<div class="meta">${chip}${lang ? `<span>${lang}</span>` : ""}<span>unbound</span></div>`;
 
-    return `<div class="card">${head}
-      <forge-waveform voice-id="${id}"></forge-waveform>
-      ${meta}</div>`;
+    return `<div class="card">${head}${meta}</div>`;
   }
 
   _ghost() {

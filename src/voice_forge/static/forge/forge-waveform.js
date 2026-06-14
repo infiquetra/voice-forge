@@ -6,17 +6,20 @@
  * bars sampled from the take, and a thin ember progress fill that warms the
  * bars it has passed — the take plays "hot" the same way a card forges hot.
  *
- * Two feeds, same chip:
+ * Feeds, same chip:
  *   - `src="…"` attribute → loads a URL (e.g. /v1/audio/speech output, a ref
  *     WAV) through an off-DOM <audio> element. Peaks are an even placeholder
  *     bar until the real samples arrive.
- *   - setPcm(Float32Array, sampleRate) → render true peaks straight from the
- *     WS PCM stream (/v1/tts/stream pcm_f32le frames), no decode round-trip.
+ *   - setPcm(Float32Array, sampleRate) — or the `pcm` property + `sample-rate`
+ *     attribute, the form HTML integrators use — render true peaks straight from
+ *     the WS PCM stream (/v1/tts/stream pcm_f32le frames), no decode round-trip.
  *
  * The silence-collapse signal (KTD3): a take whose peak amplitude is below the
  * floor (< 0.05) is a collapsed synthesis, not a quiet one. It renders as a
  * flat --forge-bad line with a "silent" label instead of bars — the one place
- * the player shouts. Everything else stays restrained.
+ * the player shouts. An integrator that already knows a take is dead can force
+ * this path up front with the boolean `flat` attribute, before any audio loads.
+ * Everything else stays restrained.
  *
  * Self-contained: no store slices observed. The shell feeds it audio and reads
  * back play()/stop(); local play state drives an on-demand refresh().
@@ -34,7 +37,8 @@ class ForgeWaveform extends ForgeElement {
   static observe = [];
 
   static get observedAttributes() {
-    return ["src"];
+    // src/sample-rate feed audio; flat forces the silence-collapse render path.
+    return ["src", "flat", "sample-rate"];
   }
 
   constructor() {
@@ -44,9 +48,14 @@ class ForgeWaveform extends ForgeElement {
     this._peak = 0; // overall max amplitude — drives the silence-collapse test
     this._progress = 0; // 0..1 played fraction, drives the ember fill
     this._playing = false;
+    this._flat = false; // `flat` attr present → force the silence-collapse line
+    this._pcm = null; // last samples set via the `pcm` property (getter mirror)
   }
 
   connectedCallback() {
+    // Read `flat` before the first paint so a pre-declared silent take renders
+    // collapsed immediately (attributeChangedCallback also keeps it in sync).
+    this._flat = this.hasAttribute("flat");
     super.connectedCallback();
     const src = this.getAttribute("src");
     if (src) this._loadSrc(src);
@@ -58,19 +67,51 @@ class ForgeWaveform extends ForgeElement {
   }
 
   attributeChangedCallback(name, oldVal, newVal) {
-    if (name === "src" && newVal !== oldVal && this._root) this._loadSrc(newVal);
+    if (newVal === oldVal) return;
+    if (name === "src") {
+      // Initial src is loaded by connectedCallback; act only once connected.
+      if (this._root) this._loadSrc(newVal);
+    } else if (name === "flat") {
+      this._flat = newVal !== null;
+      this.refresh();
+    } else if (name === "sample-rate") {
+      // Peaks are rate-independent; only the playback WAV header carries the
+      // rate, so re-wrap any already-set PCM at the new rate.
+      if (this._pcm) this.setPcm(this._pcm, this._sampleRate());
+    }
   }
 
   /* ---- public API (the shell drives these) ---------------------------- */
 
   /** Render true peaks straight from a PCM take — the WS-stream fast path. */
   setPcm(samples, sampleRate) {
+    this._pcm = samples || null;
     this._peaks = this._downsample(samples, BARS);
     this._peak = this._maxAbs(samples);
     this._progress = 0;
     // Wrap the raw PCM in a WAV so the <audio> engine can still play it back.
     this._loadBlob(pcmToWav(samples, sampleRate || 24000));
     this.refresh();
+  }
+
+  /**
+   * Property feed: `el.pcm = floatArray` renders true peaks the same way setPcm
+   * does, but as an assignment — HTML can't carry a typed array, so integrators
+   * set it on the upgraded element. Sample rate comes from the `sample-rate`
+   * attribute, defaulting to the WS stream's 24 kHz.
+   */
+  set pcm(samples) {
+    if (samples && samples.length) this.setPcm(samples, this._sampleRate());
+    else this._pcm = null;
+  }
+
+  get pcm() {
+    return this._pcm;
+  }
+
+  /** Sample rate from the attribute, defaulting to the WS stream's 24 kHz. */
+  _sampleRate() {
+    return Number(this.getAttribute("sample-rate")) || 24000;
   }
 
   /** Start playback from the current position. */
@@ -206,8 +247,10 @@ class ForgeWaveform extends ForgeElement {
     const button = `<button class="play" data-playing="${playing}" aria-label="${playing ? "pause" : "play"}">${icon}</button>`;
 
     let track;
-    if (this._audio && this._peak < SILENCE_FLOOR) {
-      // Collapsed synthesis — flat bad-line + label, no bars.
+    if (this._flat || (this._audio && this._peak < SILENCE_FLOOR)) {
+      // Collapsed synthesis — flat bad-line + label, no bars. Either measured
+      // (peak below the floor) or forced up front by the `flat` attribute, which
+      // wins regardless of peaks so an integrator can pre-declare a dead take.
       track = `<div class="silent" role="img" aria-label="silent take — synthesis collapsed">
           <div class="line"></div><span class="label">silent</span></div>`;
     } else if (this._peaks) {
