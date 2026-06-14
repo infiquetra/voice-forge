@@ -56,6 +56,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 
@@ -251,10 +252,14 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
         KNOWN_TUNABLES = HiggsBackend.KNOWN_TUNABLES
 
         def __init__(self) -> None:
-            self._model: HiggsAudioModel | None = None
-            self._audio_tokenizer: object | None = None  # HiggsAudioTokenizer
-            self._tokenizer: object | None = None  # transformers tokenizer
-            self._config_obj: object | None = None  # transformers AutoConfig
+            # These hold fully-untyped 3rd-party objects (HiggsAudioModel,
+            # transformers tokenizer/config, the audio tokenizer) loaded lazily in
+            # load(); typed Any so attribute access on the untyped stack is honest
+            # to mypy without per-line ignores.
+            self._model: Any = None  # HiggsAudioModel
+            self._audio_tokenizer: Any = None  # HiggsAudioTokenizer
+            self._tokenizer: Any = None  # transformers tokenizer
+            self._config_obj: Any = None  # transformers AutoConfig
             self._collator: HiggsAudioSampleCollator | None = None
             self._device: str = "cpu"
             self._config: dict = {}
@@ -329,8 +334,14 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
             text_tok_kwargs: dict = {}
             if model_revision:
                 text_tok_kwargs["revision"] = model_revision
-            self._tokenizer = AutoTokenizer.from_pretrained(model_name, **text_tok_kwargs)
-            self._config_obj = AutoConfig.from_pretrained(model_name, **text_tok_kwargs)
+            # nosec B615 — same pinned model repo as the model load above; revision
+            # rides text_tok_kwargs when model_revision is configured.
+            self._tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
+                model_name, **text_tok_kwargs
+            )
+            self._config_obj = AutoConfig.from_pretrained(  # nosec B615
+                model_name, **text_tok_kwargs
+            )
             self._collator = HiggsAudioSampleCollator(
                 whisper_processor=None,
                 audio_in_token_id=self._config_obj.audio_in_token_idx,

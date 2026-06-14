@@ -217,10 +217,17 @@ all = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "ruff>=0.4",
-    "mypy>=1.10",
-    "black>=24.0",
-    "bandit>=1.7",
+    "httpx>=0.27",  # required by fastapi.testclient.TestClient (the integration/functional suites)
+    # Lint/format tools are PINNED to the exact versions the pre-commit hooks
+    # use (.pre-commit-config.yaml). The named CI gates (ruff/black/mypy/bandit)
+    # run the `[dev]`-installed tool while the pre-commit gate runs the pinned
+    # hook env; if these drift apart a new linter release silently breaks `main`
+    # (e.g. black 26.x reformats what black 24.10 considers clean). Bump these
+    # and the pre-commit `rev:`s together (`pre-commit autoupdate`).
+    "ruff==0.7.4",
+    "mypy==1.13.0",
+    "black==24.10.0",
+    "bandit==1.8.0",
     "pre-commit>=3.7",
 ]
 

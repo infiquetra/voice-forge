@@ -123,7 +123,7 @@ def encrypt(plaintext: bytes, password: str) -> str:
     The returned string includes the header line and trailing newline,
     matching ``ansible-vault encrypt`` output exactly.
     """
-    if not isinstance(plaintext, (bytes, bytearray)):
+    if not isinstance(plaintext, bytes | bytearray):
         raise TypeError("encrypt() takes bytes — encode str inputs first")
     salt = _secrets.token_bytes(SALT_LEN)
     aes_key, hmac_key, iv = _derive_keys(password.encode("utf-8"), salt)
