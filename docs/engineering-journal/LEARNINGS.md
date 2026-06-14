@@ -25,6 +25,22 @@
 
 ---
 
+## 2026-06-14 (The Forge — bounded workflow for the clone-create path)
+
+### A rate-limit-safe workflow shape: 2-concurrent read-only investigate → sequential writes → validate; and verify its green, don't trust it
+
+**Context.** Built U6 (backend-inference) + the clone-create wiring via a background cc-workflow after two operator corrections: use the workflow (not inline), but design it so concurrency doesn't trip the API rate limit. An earlier 7-wide build fan-out had throttled (6/7 agents' final calls failed).
+
+**Evidence.** Workflow `wf_8d7f8eb4` (commits `267028f`, `57632ce`): phases were Investigate (2 read-only agents in parallel) → Build server (1 agent) → Wire client (1 agent) → Validate (1 agent). Peak concurrency 2; all file writes serialized. 5 agents, ~363k subagent tokens, 0 throttle errors. Two things the agents got right by reading the code instead of the handed-down spec: the multipart field is `ref_audio` not `file`, and register is `POST /voices/{id}` (no `/v1`). The validate agent self-reported "62 passed / GREEN"; I re-ran the suite myself (62), re-ran `node --check` + `ruff`, then runtime-verified every endpoint against a restarted server (infer f5/higgs; a real WAV → bound card; override neutts→f5 persisted to the registry; the keyless 503 handled gracefully) before committing.
+
+**Mechanism.** Rate limits are a function of *peak concurrent* agent calls, not total. A wide `parallel()` barrier spikes peak; a pipeline of `await`-ed sequential stages with a small parallel investigate phase keeps peak ≤2 while still using the workflow for everything. Shared-file work (`server.py`) *must* serialize anyway — sequential is the correct shape, not a fallback to inline. Separately: a workflow's own validation agent is still an unverified claim; the only ground truth is re-running the commands and exercising the result yourself.
+
+**Generalizable rule.** (a) Design workflows around *peak concurrency*: parallelize only read-only/independent phases (≤2–3), serialize every phase that writes a shared file — that alone prevents throttling without abandoning the workflow. (b) Tell investigation agents to trust the code over the spec and report deviations; they catch real contract errors (field names, route prefixes) a hand-written spec guesses wrong. (c) A workflow reporting "green" is a claim to verify, not a result to trust — re-run tests + runtime-check before committing its output.
+
+**Refs.** Memory `api-throttling-discipline`; work-session `docs/work-sessions/2026-06-14-the-forge.md`; the API-envelope LEARNING below (same "verify, don't assert" theme).
+
+---
+
 ## 2026-06-14 (The Forge — first browser run of the new studio)
 
 ### A no-build component studio built against an *assumed* API shape breaks the moment real data arrives — only serving it reveals it
