@@ -36,7 +36,13 @@ from typing import Literal
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -1344,6 +1350,19 @@ _FORGE_DIR = Path(__file__).resolve().parent / "static" / "forge"
 if _FORGE_DIR.is_dir():
     # html=True serves index.html at /forge/ and every module/asset under /forge/*.
     app.mount("/forge", StaticFiles(directory=_FORGE_DIR, html=True), name="forge")
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Front door: bare root redirects to the Forge studio.
+
+    ``voice-forge serve`` users open ``http://<host>:<port>/`` and land in
+    the studio. 307 (temporary) — keep ``/`` reroutable; the front door may
+    move (e.g. a chooser page or SPA-at-root) and 308 would get cached
+    permanently by browsers. /lab and /demo remain reachable by their own
+    paths (KTD7: /lab stays).
+    """
+    return RedirectResponse(url="/forge/", status_code=307)
 
 
 @app.get("/demo", response_class=HTMLResponse)

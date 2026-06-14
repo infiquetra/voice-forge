@@ -22,6 +22,10 @@ const _state = {
   density: localStorage.getItem("forge-density") || "calm",
   // is anything synthesizing right now? (drives the ember "hot" signal)
   forging: false,
+  // transient: the voice id of a just-forged card (clone/pick success). Rides the
+  // render string so it survives _load()'s repaints; the card plays the one-shot
+  // forge-complete bloom and self-clears this after the animation. null at rest.
+  justForged: null,
   // transient audition set (POST /v1/forge/design → []); non-empty swaps the
   // subject to <forge-contact-sheet>. Cleared on pick/cancel. NOT a registry
   // slice. Always set a FRESH array (store.set's identity check, line 38, will

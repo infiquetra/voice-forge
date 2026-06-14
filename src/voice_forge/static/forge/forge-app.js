@@ -112,7 +112,10 @@ class ForgeApp extends ForgeElement {
 
       if (res.ok) {
         await this._load(); // re-pull /v1/audio/voices → the new bound card appears
-        store.set({ focused: voiceId, forging: false });
+        // justForged: the one-shot quench — the new card plays the forge-complete
+        // bloom. Rides the render string (forge-voice-card reads the store flag in
+        // render()), so it survives _load()'s repaint; the card self-clears it.
+        store.set({ focused: voiceId, forging: false, justForged: voiceId });
       } else {
         // e.g. 503 when Whisper is missing, 409 on a name collision. Un-stick the
         // anvil so the UI isn't left dead, and surface why.
@@ -249,7 +252,9 @@ class ForgeApp extends ForgeElement {
         store.set({ candidates: [], forging: false });
         this._auditionCtx = null;
         await this._load();
-        store.set({ focused: boundId });
+        // justForged: same one-shot quench as the clone path — the just-bound card
+        // plays the forge-complete bloom and self-clears the flag.
+        store.set({ focused: boundId, justForged: boundId });
       } else {
         // e.g. 409 name collision, 502 EL persist failure. Keep the sheet up so
         // the user can pick again; un-stick the anvil and surface why.

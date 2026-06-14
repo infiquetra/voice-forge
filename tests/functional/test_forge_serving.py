@@ -88,6 +88,24 @@ def test_legacy_lab_still_serves(client: TestClient) -> None:
     assert client.get("/lab").status_code == 200
 
 
+def test_root_redirects_to_forge(client: TestClient) -> None:
+    # U10 — /forge is the front door: bare root 307-redirects to /forge/. 307
+    # (temporary) keeps / reroutable; 308 would get cached permanently by browsers.
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 307
+    assert r.headers["location"] == "/forge/"
+    # And the redirect resolves to the served studio.
+    assert client.get("/").status_code == 200
+
+
+def test_lab_cross_links_to_forge(client: TestClient) -> None:
+    # U10 — /lab gains an additive cross-link to the new studio without changing
+    # its own route (KTD7). The legacy /demo link must survive the edit too.
+    body = client.get("/lab").text
+    assert 'href="/forge/"' in body
+    assert 'href="/demo"' in body
+
+
 def test_no_runtime_cdn_imports() -> None:
     # The offline / no-build guard: no asset may import from an http(s) URL at
     # runtime (that would be a hidden network dependency / a vendoring failure).

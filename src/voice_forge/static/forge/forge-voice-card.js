@@ -23,8 +23,9 @@ import { ForgeElement, esc } from "./base.js";
 import { store } from "./store.js";
 
 class ForgeVoiceCard extends ForgeElement {
-  // focused drives selection; forging drives the hot face; voices feeds the data.
-  static observe = ["voices", "focused", "forging"];
+  // focused drives selection; forging drives the hot face; voices feeds the data;
+  // justForged drives the one-shot forge-complete bloom on the just-landed card.
+  static observe = ["voices", "focused", "forging", "justForged"];
 
   /** The voice record this card reflects (or null → ghost face). */
   _voice() {
@@ -104,6 +105,22 @@ class ForgeVoiceCard extends ForgeElement {
       }
       @keyframes heat { from { background-position: 220% 0; } to { background-position: -120% 0; } }
 
+      /* forged: the one-shot quench — heat settling into the finished piece.
+         A single ~600ms ember bloom on the just-landed card, then back to rest.
+         It plays OVER the aria-selected state and releases to it (no forwards
+         fill, so the selected-ember border at :host([aria-selected]) wins after). */
+      .card.just-forged {
+        animation: forge-complete 600ms var(--forge-ease) 1;
+      }
+      @keyframes forge-complete {
+        0%   { border-color: var(--forge-ember-bright);
+               box-shadow: 0 0 0 1px var(--forge-ember-bright), 0 0 22px var(--forge-ember-edge); }
+        60%  { border-color: var(--forge-ember);
+               box-shadow: 0 0 0 1px var(--forge-ember-edge), 0 0 12px var(--forge-ember-edge); }
+        100% { border-color: var(--forge-border);
+               box-shadow: 0 0 0 1px transparent, 0 0 0 transparent; }
+      }
+
       .skel { background: var(--forge-inset); border-radius: var(--forge-radius-sm); height: 12px; overflow: hidden; }
       .skel.w-half { width: 50%; }
       .skel.tall { height: 40px; margin-top: 12px; }
@@ -111,6 +128,8 @@ class ForgeVoiceCard extends ForgeElement {
 
       @media (prefers-reduced-motion: reduce) {
         .card.hot::after { animation: none; opacity: 0.4; }
+        /* spark → a single static border tint that fades, no keyframe motion. */
+        .card.just-forged { animation: none; border-color: var(--forge-ember-edge); transition: border-color 400ms var(--forge-ease); }
       }
     `;
   }
@@ -143,7 +162,14 @@ class ForgeVoiceCard extends ForgeElement {
           } ${chip}</div>`
         : `<div class="meta">${chip}${lang ? `<span>${lang}</span>` : ""}<span>unbound</span></div>`;
 
-    return `<div class="card">${head}${meta}</div>`;
+    // The one-shot quench: when this voice is the just-forged subject, paint the
+    // bloom class. It's part of the render OUTPUT, so it survives base.js rebuilding
+    // innerHTML across _load()'s repaints — the flag stays set in the store until
+    // bind() clears it after the animation. esc() is moot here (id-equality on a
+    // store flag, no interpolation), but the class is gated on a strict match so a
+    // stale flag never blooms the wrong card.
+    const justForged = store.get("justForged") === (v.voice_id || v.id);
+    return `<div class="card${justForged ? " just-forged" : ""}">${head}${meta}</div>`;
   }
 
   _ghost() {
@@ -196,6 +222,19 @@ class ForgeVoiceCard extends ForgeElement {
         store.set({ focused: id });
         this.dispatchEvent(new CustomEvent("forge-serve", { detail: { id }, bubbles: true, composed: true }));
       };
+    }
+
+    // One-shot quench: the spark rode in via the rendered class (it survives
+    // _load()'s repaint because the store flag is still set). Clear it once, after
+    // the bloom, so the next paint lands the card on its clean resting face. Guard
+    // on this card's id so only the just-forged card schedules the clear — and the
+    // clear re-checks the flag, so a stale flag from a fast double-forge self-heals
+    // on the next success. 650ms > the 600ms anim (and the 400ms reduced-motion
+    // transition) so the clearing repaint never truncates the bloom.
+    if (store.get("justForged") === id) {
+      setTimeout(() => {
+        if (store.get("justForged") === id) store.set({ justForged: null });
+      }, 650);
     }
   }
 }
