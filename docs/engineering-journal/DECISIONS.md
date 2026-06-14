@@ -51,6 +51,25 @@
 
 **Refs.** Root `STRATEGY.md` (2026-06-14). [QUEUED P1 "The Forge: full web-UI redesign"](QUEUED.md), [#60 "Qwen3-TTS-VoiceDesign provider"](QUEUED.md), [#59 "generic mlx_audio backend"](QUEUED.md). [PRIOR_ART.md](../PRIOR_ART.md) — no surveyed tool offers local design+bind+serve.
 
+### The Forge v1 — key technical decisions (plan: docs/plans/2026-06-14-the-forge-plan.md)
+
+**Decision.** The `/forge` studio v1 is built on these load-bearing choices (full rationale in the plan):
+
+- **No-build serving.** Vendored Lit + static assets under `src/voice_forge/static/forge/`, served as a `FileResponse` like `/lab`, shipped in the wheel via hatchling — no Node/bundler/build step ever. Honors the "ships a predefined interface" rule from the 2026-06-14 direction ADR.
+- **Component set.** `<forge-*>` Lit components (app/shell, empty-hero, voice-card, waveform+transport, contact-sheet, backend-chip, spec-editor, serve-console) over a tiny shared reactive store; the Voice Card is the atomic primitive.
+- **Persona = settable 1:1 registry binding.** `Registry.set_persona()` mirroring `tune()` + `PUT /voices/{id}/persona` + `GET /v1/personas` + a create-time `persona` setter; no global uniqueness in v1 (persona-as-entity deferred).
+- **Backend-inference signal.** A one-tap "distinct accent?" affordance (cheap pre-check) → LLM-backbone vs F5 default, with an editable why-chip + one-click override; robust auto-detection deferred.
+- **Silence-collapse.** Reuse QUEUED #61 thresholds (peak < 0.05, ≤3 retries, pre-grey in the contact-sheet).
+- **Seeded default voice.** A bundled no-key example voice (`example: true`), never generated, for an audible zero-config first paint.
+- **`/lab` stays** as the legacy power-user surface; `/forge` is additive and primary.
+- **UI tests are browser-driven** (Playwright/MCP) + Python endpoint/registry tests in pytest; no JS test runner (would break the no-build rule).
+
+**Rejected alternatives.** Vendored framework (Preact/Solid) and htmx server-rendering — both lose to no-build Web Components for a zero-Node self-hosted tool (see the F-architecture fork in [the ideation](../ideation/2026-06-14-the-forge-ideation.md)). Heavy-forge and clean-only identities — rejected for dark-studio + restrained ember accents.
+
+**Revisit when.** The component set strains plain Lit (consider a heavier tool only if no-build genuinely blocks); OR the local design model (#60) ships (design-from-description stops needing ElevenLabs); OR the deferred substrate endpoints (one-call forge, capabilities manifest) become worth building (the UI re-points from `/v1/backends` to the manifest).
+
+**Refs.** [Plan](../plans/2026-06-14-the-forge-plan.md), [requirements](../brainstorms/2026-06-14-the-forge-requirements.md), [ideation](../ideation/2026-06-14-the-forge-ideation.md). QUEUED #61 (silence thresholds), #60 (local Voice Design).
+
 ---
 
 ## 2026-05-26
