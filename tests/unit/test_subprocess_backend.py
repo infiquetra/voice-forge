@@ -26,8 +26,7 @@ from voice_forge.backends._subprocess import (
 # The fake shim script. Written to a temp dir + chmod'd executable + invoked
 # directly by SubprocessBackend's _spawn_child(). This is what would normally
 # be `voice-forge-backend-shim` installed in the per-backend venv.
-_FAKE_SHIM_SCRIPT = textwrap.dedent(
-    """\
+_FAKE_SHIM_SCRIPT = textwrap.dedent("""\
     #!/usr/bin/env python3
     import argparse
     import http.server
@@ -74,8 +73,7 @@ _FAKE_SHIM_SCRIPT = textwrap.dedent(
 
     server = http.server.HTTPServer((args.host, args.port), ShimHandler)
     server.serve_forever()
-    """
-)
+    """)
 
 
 class FakeSubprocessBackend(SubprocessBackend):

@@ -319,9 +319,7 @@ class DesignRequest(BaseModel):
 
 class DesignCandidate(BaseModel):
     generated_voice_id: str
-    audio: str = Field(
-        ..., description="data:audio/mpeg;base64,... — playable contact-sheet src"
-    )
+    audio: str = Field(..., description="data:audio/mpeg;base64,... — playable contact-sheet src")
     label: str
 
 
@@ -335,17 +333,13 @@ class PickRequest(BaseModel):
     """POST /v1/forge/pick — persist one candidate as a BOUND voice-forge voice."""
 
     generated_voice_id: str = Field(..., description="Ephemeral ID from /design candidate")
-    description: str = Field(
-        ..., description="Carried back from /design (EL voice_description)"
-    )
+    description: str = Field(..., description="Carried back from /design (EL voice_description)")
     voice_id: str = Field(..., description="Final voice-forge registry id (born bound)")
     voice_name: str | None = Field(
         default=None, description="EL library name; defaults to voice_id"
     )
     persona: str | None = Field(default=None, description="Persona to bind at creation")
-    backend: str | None = Field(
-        default=None, description="Override; else U6/default inference"
-    )
+    backend: str | None = Field(default=None, description="Override; else U6/default inference")
     accent_distinct: bool = Field(
         default=False, description="Route via U6 infer_backend when backend omitted"
     )
@@ -1190,7 +1184,10 @@ async def list_personas() -> PersonaList:
     registry = _registry()
     groups: dict[str, list[str]] = {}
     for v in registry.list():
-        groups.setdefault(v.persona, []).append(v.voice_id)
+        if (
+            v.persona
+        ):  # only voices actually bound to a persona (and keeps the key str, not str|None)
+            groups.setdefault(v.persona, []).append(v.voice_id)
     return PersonaList(
         personas=[PersonaGroup(persona=p, voices=sorted(vs)) for p, vs in sorted(groups.items())]
     )

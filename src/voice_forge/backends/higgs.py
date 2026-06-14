@@ -682,8 +682,7 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
                     usable_frames = max(0, len(cols) - delay_pad - 1)
                     yielded_frames = yielded_samples // samples_per_frame
                     threshold = (
-                        STREAM_FIRST_CHUNK_FRAMES if not first_chunk_done
-                        else STREAM_CHUNK_FRAMES
+                        STREAM_FIRST_CHUNK_FRAMES if not first_chunk_done else STREAM_CHUNK_FRAMES
                     )
                     if usable_frames - yielded_frames < threshold:
                         continue

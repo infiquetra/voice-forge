@@ -70,9 +70,7 @@ def test_pick_persists_and_registers_bound_voice(
         "voice_forge.voice_design.elevenlabs.create_voice_from_preview",
         fake_create_from_preview,
     )
-    monkeypatch.setattr(
-        "voice_forge.voice_lab.elevenlabs.pull_and_prepare", fake_pull
-    )
+    monkeypatch.setattr("voice_forge.voice_lab.elevenlabs.pull_and_prepare", fake_pull)
 
     r = client.post(
         "/v1/forge/pick",
@@ -134,9 +132,7 @@ def test_pick_uses_u6_inference_when_backend_omitted(
     assert r.json()["backend"] == expected
 
 
-def test_pick_gated_without_key(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_pick_gated_without_key(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     r = client.post(
         "/v1/forge/pick",
@@ -192,9 +188,7 @@ def test_pick_maps_persist_error_to_502(
         )
 
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
-    monkeypatch.setattr(
-        "voice_forge.voice_design.elevenlabs.create_voice_from_preview", boom
-    )
+    monkeypatch.setattr("voice_forge.voice_design.elevenlabs.create_voice_from_preview", boom)
     r = client.post(
         "/v1/forge/pick",
         json={"generated_voice_id": "gv", "description": "d", "voice_id": "v"},
@@ -214,9 +208,7 @@ def test_pick_maps_pull_value_error_to_400(
     def bad_pull(*a, **k):
         raise ValueError("voice 'el_x' has no preview_url")
 
-    monkeypatch.setattr(
-        "voice_forge.voice_lab.elevenlabs.pull_and_prepare", bad_pull
-    )
+    monkeypatch.setattr("voice_forge.voice_lab.elevenlabs.pull_and_prepare", bad_pull)
     r = client.post(
         "/v1/forge/pick",
         json={"generated_voice_id": "gv", "description": "d", "voice_id": "v", "backend": "f5"},

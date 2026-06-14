@@ -215,9 +215,7 @@ class HiggsMlxBackend(SubprocessBackend):
             "min": 0,
             "max": 32,
             "default": 7,
-            "description": (
-                "Repetition-Avoidance Sampling window length. 0 disables RAS."
-            ),
+            "description": ("Repetition-Avoidance Sampling window length. 0 disables RAS."),
         },
         "ras_max_repeat": {
             "type": "int",
@@ -332,9 +330,7 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
             # are born on the executor thread. Every subsequent MLX call
             # routes through ``self._run_on_mlx_thread`` and therefore
             # sees the same thread-local GPU stream context.
-            self._mlx_executor = ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix="mlx-higgs"
-            )
+            self._mlx_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx-higgs")
 
             def _do_load() -> HiggsAudioServer:
                 # HiggsAudioServer.from_pretrained pulls + materialises the
@@ -372,9 +368,11 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
             # Drop server state on the MLX thread so its tensors GC'd in
             # the right thread context, then shut the executor down.
             if self._mlx_executor is not None and self._server is not None:
+
                 def _drop():
                     pass  # server ref is dropped below; this just forces
-                          # the executor to run something on its thread.
+                    # the executor to run something on its thread.
+
                 try:
                     self._run_on_mlx_thread(_drop)
                 except RuntimeError:
@@ -422,9 +420,7 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
                 "max_new_frames": int(sampling.get("max_new_frames", 1200)),
                 "ras_win_len": ras_win_len_raw if ras_win_len_raw > 0 else None,
                 "ras_max_repeat": int(sampling.get("ras_max_repeat", 2)),
-                "sampling_warmup_frames": int(
-                    sampling.get("sampling_warmup_frames", 8)
-                ),
+                "sampling_warmup_frames": int(sampling.get("sampling_warmup_frames", 8)),
                 "fade_in_ms": float(sampling.get("fade_in_ms", 30.0)),
                 "fade_out_ms": float(sampling.get("fade_out_ms", 15.0)),
             }
@@ -452,9 +448,7 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
                 # outside voice-forge's clone contract; require a reference
                 # so the failure is loud instead of silently producing a
                 # different voice.
-                raise ValueError(
-                    "higgs-mlx requires ref_audio_path + ref_text for cloning"
-                )
+                raise ValueError("higgs-mlx requires ref_audio_path + ref_text for cloning")
             cache_key = (ref.voice_id or "", ref.ref_text or "")
             current = (self._cached_ref_voice_id or "", self._cached_ref_text or "")
             if cache_key != current:
@@ -512,8 +506,7 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
                 # Should never happen for Higgs v2; raise loudly rather
                 # than silently desync the parent's PCM math.
                 raise RuntimeError(
-                    f"higgs-mlx returned sr={result.sampling_rate}, "
-                    f"expected {SAMPLE_RATE}"
+                    f"higgs-mlx returned sr={result.sampling_rate}, " f"expected {SAMPLE_RATE}"
                 )
             return pcm
 
@@ -524,9 +517,7 @@ if os.environ.get("VOICE_FORGE_SUBPROCESS_CHILD") == "1":
         # amortise the per-chunk asyncio yield overhead.
         _STREAM_CHUNK_MS = 640.0
 
-        def synthesize_stream(
-            self, text: str, ref: VoiceRef
-        ) -> Iterator[np.ndarray]:
+        def synthesize_stream(self, text: str, ref: VoiceRef) -> Iterator[np.ndarray]:
             """Stream PCM chunks.
 
             Implementation: full-generate-then-chunk. Yields ~640 ms slices

@@ -71,9 +71,7 @@ def test_design_forwards_description_and_sample_text(
         return fake_previews
 
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
-    monkeypatch.setattr(
-        "voice_forge.voice_design.elevenlabs.create_voice_previews", fake_create
-    )
+    monkeypatch.setattr("voice_forge.voice_design.elevenlabs.create_voice_previews", fake_create)
     r = client.post(
         "/v1/forge/design",
         json={"description": "deep gravelly narrator", "sample_text": "Hello there."},
@@ -94,9 +92,7 @@ def test_design_uses_default_sample_text_when_omitted(
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
     monkeypatch.setattr(
         "voice_forge.voice_design.elevenlabs.create_voice_previews",
-        lambda description, sample_text, *, api_key=None: seen.update(
-            sample_text=sample_text
-        )
+        lambda description, sample_text, *, api_key=None: seen.update(sample_text=sample_text)
         or fake_previews,
     )
     r = client.post("/v1/forge/design", json={"description": "anything"})
@@ -104,9 +100,7 @@ def test_design_uses_default_sample_text_when_omitted(
     assert seen["sample_text"] == SAMPLE_TEXT_DEFAULT
 
 
-def test_design_gated_without_key(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_design_gated_without_key(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     r = client.post("/v1/forge/design", json={"description": "anything", "voice_id": "x"})
     # CRITICAL: must be 503, NOT 500 — proves the gate fires before the EL module's
@@ -132,8 +126,6 @@ def test_design_maps_elevenlabs_error_to_502(
         raise ElevenLabsError("POST", "/v1/text-to-voice/create-previews", 429, "rate limited")
 
     monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
-    monkeypatch.setattr(
-        "voice_forge.voice_design.elevenlabs.create_voice_previews", boom
-    )
+    monkeypatch.setattr("voice_forge.voice_design.elevenlabs.create_voice_previews", boom)
     r = client.post("/v1/forge/design", json={"description": "x"})
     assert r.status_code == 502, r.text

@@ -77,15 +77,11 @@ def test_playback_does_not_trigger_global_rerender() -> None:
     # take killed itself the instant it started). store.forging means "a
     # synthesis is in flight", set by the serve/audition path, never by playback.
     waveform_js = (FORGE_DIR / "forge-waveform.js").read_text(encoding="utf-8")
-    code = "\n".join(
-        line for line in waveform_js.splitlines() if not line.lstrip().startswith("*")
-    )
+    code = "\n".join(line for line in waveform_js.splitlines() if not line.lstrip().startswith("*"))
     assert "store.set({ forging" not in code, "playback must not write the global synth flag"
     # And the shell renders nothing off forging, so it must not observe it
     # (observing it rebuilds the whole fleet — and any take playing in a card —
     # on every synth).
     app_js = (FORGE_DIR / "forge-app.js").read_text(encoding="utf-8")
-    observe_line = next(
-        line for line in app_js.splitlines() if "static observe" in line
-    )
+    observe_line = next(line for line in app_js.splitlines() if "static observe" in line)
     assert '"forging"' not in observe_line, "the shell must not observe forging"
