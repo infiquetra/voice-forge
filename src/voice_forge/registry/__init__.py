@@ -214,3 +214,25 @@ class Registry:
             meta.pop("persona", None)
         meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
         return _load_voice(voice_dir)
+
+    def set_backend(self, voice_id: str, backend: str) -> VoiceRef:
+        """Change a registered voice's backend in place (metadata-only edit).
+
+        Mirrors :meth:`set_persona`: rewrites ``metadata['backend']`` and nothing
+        else — ref.wav, ref.txt, persona, and the sampling block are untouched.
+        Does NOT validate that ``backend`` is known/installed; the REST layer
+        validates against ``known_backends()`` before calling (parallel to
+        set_default_backend's contract).
+
+        Raises KeyError if the voice is missing. Raises ValueError on empty backend.
+        """
+        if not backend or not isinstance(backend, str):
+            raise ValueError(f"backend must be a non-empty string, got {backend!r}")
+        voice_dir = _voice_dir(self.root, voice_id)
+        if not voice_dir.exists():
+            raise KeyError(f"voice not in registry: {voice_id!r}")
+        meta_path = voice_dir / "metadata.json"
+        meta = json.loads(meta_path.read_text())
+        meta["backend"] = backend
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+        return _load_voice(voice_dir)

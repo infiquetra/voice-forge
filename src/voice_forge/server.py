@@ -41,6 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__, config, lab_state, metrics
+from .backend_inference import infer_backend
 from .backends import available_backends, get_backend, known_backends, load_backend_module
 from .persona_coverage import ensure_full_coverage
 from .registry import Registry
@@ -170,6 +171,21 @@ def _registry() -> Registry:
     return Registry()
 
 
+def _is_backend_installed(name: str) -> bool:
+    """True if the backend's extra is importable on this host.
+
+    Factored out of ``list_backends``'s installed-probe so the
+    ``/v1/forge/infer-backend`` endpoint shares the same detection logic
+    (load the module to trigger registration, then resolve the class).
+    """
+    try:
+        load_backend_module(name)
+        get_backend(name)
+        return True
+    except (ImportError, KeyError):
+        return False
+
+
 # ----- Schemas -----
 
 
@@ -211,6 +227,12 @@ class PersonaBindRequest(BaseModel):
     """PUT body for /voices/{id}/persona. ``None``/empty clears the explicit binding."""
 
     persona: str | None = None
+
+
+class BackendBindRequest(BaseModel):
+    """PUT body for /voices/{id}/backend. Backend is required (no clear/unset)."""
+
+    backend: str = Field(..., description="Backend name to route this voice through")
 
 
 class PersonaGroup(BaseModel):
@@ -467,6 +489,13 @@ class Capabilities(BaseModel):
     design_local: bool = False
 
 
+class InferBackendResponse(BaseModel):
+    """Cold-start one-tap backend recommendation for the Forge clone-create path."""
+
+    backend: str
+    why: str
+
+
 class BackendDefaultRequest(BaseModel):
     backend: str = Field(..., description="Backend name to make the new default")
 
@@ -538,6 +567,24 @@ async def capabilities() -> Capabilities:
         elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
         design_local=False,  # local design-from-description (#60) not yet shipped
     )
+
+
+@app.get("/v1/forge/infer-backend", response_model=InferBackendResponse)
+async def forge_infer_backend(accent_distinct: bool = False) -> InferBackendResponse:
+    """Recommend a clone backend for the Forge cold-start one-tap.
+
+    ``accent_distinct=true`` routes to an installed LLM-backbone backend
+    (preserves non-default accent); otherwise returns the system default.
+    The chosen backend is a recommendation — the client may override it via the
+    per-voice backend on POST /voices/{id} or PUT /voices/{id}/backend.
+    """
+    installed = [name for name in known_backends() if _is_backend_installed(name)]
+    backend, why = infer_backend(
+        accent_distinct=accent_distinct,
+        installed=installed,
+        default=config.get_default_backend(),
+    )
+    return InferBackendResponse(backend=backend, why=why)
 
 
 @app.post("/v1/backends/{name}/load", response_model=BackendLifecycleResponse)
@@ -846,6 +893,35 @@ async def bind_persona(voice_id: str, req: PersonaBindRequest) -> VoiceInfo:
     registry = _registry()
     try:
         v = registry.set_persona(voice_id, req.persona)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    return VoiceInfo(
+        id=v.voice_id,
+        backend=v.backend,
+        persona=v.persona,
+        language=v.metadata.get("language"),
+        description=v.metadata.get("description"),
+        metadata=v.metadata,
+    )
+
+
+@app.put("/voices/{voice_id}/backend", response_model=VoiceInfo)
+async def bind_backend(voice_id: str, req: BackendBindRequest) -> VoiceInfo:
+    """Override a single voice's backend in place. Mirrors bind_persona's shape.
+
+    Validates the backend is known (400 otherwise), then rewrites only
+    metadata['backend'] — ref audio, persona, and sampling are preserved.
+    Does NOT re-route other voices or change the system default. 400 (unknown
+    backend) takes precedence over 404 (missing voice).
+    """
+    if req.backend not in known_backends():
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown backend {req.backend!r}; known: {known_backends()}",
+        )
+    registry = _registry()
+    try:
+        v = registry.set_backend(voice_id, req.backend)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
     return VoiceInfo(

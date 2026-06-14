@@ -33,7 +33,131 @@ class ForgeApp extends ForgeElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this._wireEvents();
     this._load();
+  }
+
+  // Delegated listeners on the HOST — not in bind(). bind() re-runs on every
+  // _paint() (base.js:46), which fires on every voices/backends/density/focused
+  // change, so anything wired there would be re-added (and duplicated) on each
+  // render. The host element is the stable outermost node: it exists from
+  // construction and _paint() only rewrites the shadow root's innerHTML, never
+  // touching listeners on `this`. The children dispatch bubbles+composed events,
+  // so they re-target here regardless of which re-rendered child fired them.
+  _wireEvents() {
+    this.addEventListener("forge-clone", (e) => this._onClone(e.detail?.file));
+    this.addEventListener("forge-backend-change", (e) => this._onBackendChange(e.detail?.backend));
+
+    // OUT OF SCOPE for this slice: design → contact-sheet → audition → pick, and
+    // the serve console run. Those belong to the design/audition unit that
+    // introduces their flow (and, for pick/audition, their emitters). Stubbed as
+    // logged no-ops so the event is caught at the host — not silently swallowed —
+    // and the next unit has an obvious seam to fill.
+    this.addEventListener("forge-design", (e) => this._onDesign(e.detail));
+    this.addEventListener("forge-serve", (e) => this._onServe(e.detail));
+  }
+
+  // forge-clone {file}: register an uploaded clip as a new bound voice.
+  // The hero collects neither id nor persona, so derive both from the filename
+  // (U7 "born bound": a persona makes the new card land on the `bound` face).
+  // The backend is inferred server-side, then passed on register so the voice is
+  // created on the right backbone in one shot.
+  async _onClone(file) {
+    if (!file) return;
+
+    const base = (file.name || "voice").replace(/\.[^.]+$/, "");
+    const voiceId =
+      base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "voice";
+    const persona = base.replace(/[-_]+/g, " ").trim() || voiceId;
+
+    // Pre-focus the would-be card, then run the anvil hot. Until _load() returns
+    // there is no card for voiceId, so the hero runs hot during the in-flight
+    // window (forge-empty-hero reads `forging`) — the correct cold-start signal.
+    store.set({ focused: voiceId, forging: true });
+
+    try {
+      // Recommend a backend (cold-start one-tap). Best-effort: if it fails the
+      // server falls back to the configured default on register anyway.
+      let backend = "";
+      try {
+        const inf = await fetch("/v1/forge/infer-backend").then((r) => (r.ok ? r.json() : null));
+        backend = inf?.backend || "";
+      } catch {
+        backend = "";
+      }
+
+      const form = new FormData();
+      form.append("ref_audio", file); // server Form field (server.py:764)
+      form.append("persona", persona); // born bound (server.py:772)
+      if (backend) form.append("backend", backend); // inferred backbone (server.py:769)
+
+      // No Content-Type header — the browser sets the multipart boundary.
+      const res = await fetch(`/voices/${encodeURIComponent(voiceId)}`, {
+        method: "POST",
+        body: form,
+      });
+
+      if (res.ok) {
+        await this._load(); // re-pull /v1/audio/voices → the new bound card appears
+        store.set({ focused: voiceId, forging: false });
+      } else {
+        // e.g. 503 when Whisper is missing, 409 on a name collision. Un-stick the
+        // anvil so the UI isn't left dead, and surface why.
+        store.set({ forging: false });
+        this._noteError(res);
+      }
+    } catch (err) {
+      store.set({ forging: false });
+      this._noteError(err);
+    }
+  }
+
+  // forge-backend-change {backend}: override the focused voice's backend in place.
+  // The chip's event carries only the backend name — no voice id — so the target
+  // is store.focused (clicking a card focuses it before its chip is reachable).
+  async _onBackendChange(backend) {
+    const voiceId = store.get("focused");
+    if (!voiceId || !backend) return; // a chip can sit on an unfocused card — guard it
+
+    store.set({ forging: true });
+    try {
+      const res = await fetch(`/voices/${encodeURIComponent(voiceId)}/backend`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backend }),
+      });
+      if (res.ok) {
+        await this._load(); // re-pull the registry so the card + chip re-render from server truth
+      } else {
+        this._noteError(res);
+      }
+    } catch (err) {
+      this._noteError(err);
+    } finally {
+      store.set({ forging: false });
+    }
+  }
+
+  // OUT OF SCOPE — these belong to the design/audition unit (the flow + the
+  // pick/audition emitters land there). Caught here so they aren't silently
+  // dropped; intentionally not implemented in this slice.
+  _onDesign(detail) {
+    console.info("forge-design received (design flow not wired yet)", detail);
+  }
+
+  _onServe(detail) {
+    console.info("forge-serve received (serve flow not wired yet)", detail);
+  }
+
+  // Minimal error surface for this slice: log it, no new UI. A future unit adds a
+  // store error key + hero banner (e.g. 503 → "Cloning needs Whisper"). The
+  // forging:false already taken by callers un-sticks the anvil so the UI is live.
+  _noteError(errOrRes) {
+    if (errOrRes instanceof Response) {
+      console.error(`forge: request failed (${errOrRes.status} ${errOrRes.statusText})`, errOrRes);
+    } else {
+      console.error("forge: request error", errOrRes);
+    }
   }
 
   async _load() {
