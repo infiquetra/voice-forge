@@ -37,6 +37,7 @@ import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__, config, lab_state, metrics
@@ -942,6 +943,17 @@ async def get_voice_reference(voice_id: str) -> FileResponse:
 
 _DEMO_HTML_PATH = Path(__file__).resolve().parent / "static" / "live_demo.html"
 _LAB_HTML_PATH = Path(__file__).resolve().parent / "static" / "lab.html"
+
+# ---- The Forge (/forge) — empty-state-first voice-design studio ----
+#
+# No-build Web Components: vanilla custom elements + native ES modules + design
+# tokens, served as plain static assets straight from the package (zero Node,
+# zero bundler, nothing vendored). The whole studio ships in the wheel under
+# static/forge/ and runs offline. /lab stays as the legacy power-user surface.
+_FORGE_DIR = Path(__file__).resolve().parent / "static" / "forge"
+if _FORGE_DIR.is_dir():
+    # html=True serves index.html at /forge/ and every module/asset under /forge/*.
+    app.mount("/forge", StaticFiles(directory=_FORGE_DIR, html=True), name="forge")
 
 
 @app.get("/demo", response_class=HTMLResponse)

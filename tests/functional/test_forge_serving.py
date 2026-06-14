@@ -1,0 +1,60 @@
+"""U1 — The Forge no-build serving foundation.
+
+Verifies the studio ships as a complete, predefined interface served straight
+from the package with zero build step (R23/R24): /forge and all its assets
+resolve, the entry mounts <forge-app>, the legacy /lab survives, and nothing in
+the bundle reaches out to a CDN at runtime (the offline / no-vendoring guard).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("fastapi")
+from fastapi.testclient import TestClient  # noqa: E402
+
+from voice_forge.server import app  # noqa: E402
+
+FORGE_DIR = Path(__file__).resolve().parents[2] / "src" / "voice_forge" / "static" / "forge"
+
+
+@pytest.fixture(scope="module")
+def client() -> TestClient:
+    return TestClient(app)
+
+
+def test_forge_index_serves(client: TestClient) -> None:
+    r = client.get("/forge/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    body = r.text
+    assert "<forge-app>" in body
+    assert 'type="module"' in body  # native ES modules, no bundle
+
+
+@pytest.mark.parametrize(
+    "asset",
+    ["forge-app.js", "tokens.css", "store.js", "base.js", "index.html"],
+)
+def test_forge_assets_serve(client: TestClient, asset: str) -> None:
+    assert client.get(f"/forge/{asset}").status_code == 200
+
+
+def test_legacy_lab_still_serves(client: TestClient) -> None:
+    # /lab stays as the legacy power-user surface (KTD7) — the redesign is additive.
+    assert client.get("/lab").status_code == 200
+
+
+def test_no_runtime_cdn_imports() -> None:
+    # The offline / no-build guard: no asset may import from an http(s) URL at
+    # runtime (that would be a hidden network dependency / a vendoring failure).
+    offenders: list[str] = []
+    for path in FORGE_DIR.rglob("*.js"):
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("import") and ("http://" in stripped or "https://" in stripped):
+                offenders.append(f"{path.name}: {stripped}")
+    assert not offenders, f"runtime CDN imports break offline/no-build: {offenders}"

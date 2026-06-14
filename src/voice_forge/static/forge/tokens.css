@@ -1,0 +1,67 @@
+/*
+ * The Forge — design tokens.
+ *
+ * Modern dark studio base (Linear/ElevenLabs register) with RESTRAINED forge
+ * accents. Ember is the signature accent AND the functional signal for active
+ * synthesis — a card runs "hot" while a voice is being forged, "cold" at rest.
+ * No heavy smithy theming: the metaphor lives in the ember accent, the verbs,
+ * and one mark — not in textures or clipart.
+ *
+ * Single source of truth for every <forge-*> component. Components read these
+ * vars through their shadow roots (custom properties pierce shadow boundaries).
+ */
+
+:root,
+:host {
+  /* --- surfaces: dark-neutral studio --- */
+  --forge-bg: #0e0f12; /* app canvas */
+  --forge-surface: #16181d; /* cards, panels */
+  --forge-surface-2: #1d2027; /* raised / hover */
+  --forge-inset: #0a0b0e; /* console, waveform wells */
+  --forge-border: #2a2e37; /* hairline dividers */
+  --forge-border-strong: #3a3f4b;
+
+  /* --- text --- */
+  --forge-text: #e7e9ee;
+  --forge-text-dim: #9aa0ad;
+  --forge-text-faint: #6b7280;
+
+  /* --- ember: the one accent + the active-synthesis signal --- */
+  --forge-ember: #ff8c42; /* signature accent: primary actions, highlights */
+  --forge-ember-bright: #ffb070; /* white-hot peak (forging) */
+  --forge-ember-dim: #c2693012; /* faint ember wash (cold-forge glow at rest) */
+  --forge-ember-edge: #ff8c4255; /* ember focus ring / hot border */
+
+  /* --- semantic --- */
+  --forge-ok: #4ade80;
+  --forge-warn: #fbbf24;
+  --forge-bad: #f87171; /* silence-collapse flat-line, errors */
+  --forge-cool: #5b9bd5; /* neutral/info (a "cold" voice) */
+
+  /* --- geometry --- */
+  --forge-radius: 10px;
+  --forge-radius-sm: 6px;
+  --forge-radius-pill: 999px;
+  --forge-gap: 16px;
+  --forge-gap-sm: 8px;
+  --forge-gap-lg: 24px;
+
+  /* --- type --- */
+  --forge-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --forge-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* --- motion (the brief forge-complete spark / heat-shimmer live here) --- */
+  --forge-ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+  --forge-heat-ms: 1200ms;
+
+  /* --- density: Calm (default) vs Bench, flipped via [data-density] on the shell --- */
+  --forge-card-pad: 18px;
+  --forge-row-h: 64px;
+  --forge-cols: 1;
+}
+
+[data-density="bench"] {
+  --forge-card-pad: 10px;
+  --forge-row-h: 40px;
+  --forge-cols: 3;
+}
