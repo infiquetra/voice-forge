@@ -24,9 +24,10 @@ import { ForgeElement, esc } from "./base.js";
 import { store } from "./store.js";
 
 class ForgeEmptyHero extends ForgeElement {
-  // voices: anvil warms on the first arrival. backends: which door is the hero.
+  // voices: anvil warms on the first arrival. capabilities: is design ready
+  // (the describe-vs-clone door). backends: is clone possible at all.
   // forging: the anvil runs hot while a synth is in flight.
-  static observe = ["voices", "backends", "forging"];
+  static observe = ["voices", "backends", "capabilities", "forging"];
 
   /** True once the registry holds at least one voice — the forge has caught. */
   _warm() {
@@ -34,24 +35,20 @@ class ForgeEmptyHero extends ForgeElement {
   }
 
   /**
-   * Read the design-capable signal off the backend snapshot. There is no single
-   * canonical flag, so accept any advertised signal and degrade gracefully:
-   * an explicit boolean on the backend or its tunables, a tunables.mode that
-   * lists "design", or a known design backend by name. Clone is always on the
-   * table; design is the gated capability.
+   * Design-from-description readiness, straight off GET /v1/capabilities: a
+   * cloud key (elevenlabs_configured) OR a local design model (design_local,
+   * #60). This is an authoritative server signal, not a guess from the backend
+   * list — ElevenLabs isn't a local backend, so it never appears in /v1/backends.
+   * Clone is the always-available fallback; design is the gated capability.
    */
   _designReady() {
-    // store.backends is normalized to a bare array at the load boundary.
-    const list = store.get("backends") || [];
-    return list.some((x) => {
-      if (!x || x.installed === false) return false;
-      const t = x.tunables || {};
-      const flag = x.design ?? x.design_capable ?? x.supports_design ?? t.design ?? t.text_to_voice;
-      if (flag) return true;
-      const mode = t.mode;
-      if (Array.isArray(mode) && mode.includes("design")) return true;
-      return String(x.name || "").toLowerCase() === "elevenlabs";
-    });
+    const caps = store.get("capabilities");
+    return !!(caps && (caps.elevenlabs_configured || caps.design_local));
+  }
+
+  /** Clone needs at least one installed TTS backend (else the forge is unforgeable). */
+  _cloneReady() {
+    return (store.get("backends") || []).some((b) => b && b.installed);
   }
 
   styles() {
@@ -107,6 +104,7 @@ class ForgeEmptyHero extends ForgeElement {
       .gate .gate-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 560; color: var(--forge-text-dim); }
       .gate .gate-title svg { width: 14px; height: 14px; color: var(--forge-text-faint); }
       .gate .gate-why { font-size: 12px; color: var(--forge-text-faint); margin: 6px 0 0; line-height: 1.5; }
+      .gate .gate-why code { font-family: var(--forge-mono); font-size: 11px; color: var(--forge-text-dim); background: var(--forge-inset); border: 1px solid var(--forge-border); border-radius: var(--forge-radius-sm); padding: 1px 5px; }
 
       .quiet { opacity: 0.85; }
 
@@ -121,7 +119,16 @@ class ForgeEmptyHero extends ForgeElement {
     const warm = this._warm();
     const hot = !!store.get("forging");
     const designReady = this._designReady();
+    const cloneReady = this._cloneReady();
     const heroClass = `hero${warm ? " warm" : ""}${hot ? " hot" : ""}`;
+
+    // Three doors by capability: design ready → describe-hero; else clone ready →
+    // clone-hero with describe gated; else neither → the unforgeable state names
+    // what to install. A gate always states why; it is never a dead button.
+    let door;
+    if (designReady) door = this._designHero();
+    else if (cloneReady) door = this._cloneHero();
+    else door = this._unforgeable();
 
     // Identity copy: dark-studio, short, the metaphor lives in the verbs.
     const title = warm ? "The forge is warm" : "The forge is cold";
@@ -133,7 +140,7 @@ class ForgeEmptyHero extends ForgeElement {
       <div class="anvil">${this._anvilMark()}</div>
       <h1>${title}</h1>
       <p class="lede">${lede}</p>
-      <div class="door">${designReady ? this._designHero() : this._cloneHero()}</div>
+      <div class="door">${door}</div>
       ${this._seed()}
     </div>`;
   }
@@ -167,9 +174,9 @@ class ForgeEmptyHero extends ForgeElement {
   }
 
   /**
-   * The gated describe box — shown when no design backend is advertised. The
-   * textarea is disabled and a one-line reason states WHY, so the path reads as
-   * "not here yet," never a dead button.
+   * The gated describe box — shown when no design path is configured. The
+   * textarea is disabled and a one-line reason states WHY (and how to enable it),
+   * so the path reads as "not here yet," never a dead button.
    */
   _describeGate() {
     return `<div class="gate quiet">
@@ -177,7 +184,22 @@ class ForgeEmptyHero extends ForgeElement {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
         Describe a voice
       </div>
-      <p class="gate-why">No design-capable backend is installed, so a voice can't be made from a description yet. Clone from a clip above, or install a design backend to unlock this path.</p>
+      <p class="gate-why">Designing a voice from a description needs a design path — set an <code>ELEVENLABS_API_KEY</code> to route to ElevenLabs Voice Design (local design is coming). Clone from a clip above for now.</p>
+    </div>`;
+  }
+
+  /**
+   * The unforgeable state — no design path AND no installed backend. The forge
+   * is booted but can't make a voice yet; name the one thing to do (install a
+   * backend) so the empty page is an instruction, not a dead end.
+   */
+  _unforgeable() {
+    return `<div class="gate">
+      <div class="gate-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+        No way to forge yet
+      </div>
+      <p class="gate-why">The forge is running, but no TTS backend is installed — so it can't clone or design a voice. Install one to begin, e.g. <code>pip install "voice-forge-tts[f5]"</code>, then reload.</p>
     </div>`;
   }
 

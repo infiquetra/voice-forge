@@ -448,6 +448,25 @@ class BackendsList(BaseModel):
     data: list[BackendInfo]
 
 
+class Capabilities(BaseModel):
+    """What the studio can do *right now* — drives the Forge cold-start door (R7).
+
+    Design-from-description readiness is a cloud-key / future-local-model question,
+    not a per-backend fact, so it lives here rather than on ``/v1/backends`` (which
+    the client also normalizes to a bare list, dropping any top-level flag).
+
+    ``elevenlabs_configured`` — an ``ELEVENLABS_API_KEY`` is in the environment, so
+        the v1 design path can route to ElevenLabs Voice Design.
+    ``design_local`` — a fully-local design-from-description model is available
+        (Qwen3-TTS-VoiceDesign, QUEUED #60). ``False`` until that ships; it's the
+        flag that flips *describe* from cloud-gated to always-on. Clone-availability
+        is derived client-side from the per-backend ``installed`` flags.
+    """
+
+    elevenlabs_configured: bool = False
+    design_local: bool = False
+
+
 class BackendDefaultRequest(BaseModel):
     backend: str = Field(..., description="Backend name to make the new default")
 
@@ -505,6 +524,20 @@ async def list_backends() -> BackendsList:
             )
         )
     return BackendsList(data=out)
+
+
+@app.get("/v1/capabilities", response_model=Capabilities)
+async def capabilities() -> Capabilities:
+    """Capability probe for the Forge cold-start door (closes review P2 F2).
+
+    The empty-state hero asks this to decide its primary door: with a design path
+    (cloud key or local model) *describe* is the hero and *clone* the secondary;
+    without one *clone* is the hero and *describe* is gated with how-to-enable.
+    """
+    return Capabilities(
+        elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
+        design_local=False,  # local design-from-description (#60) not yet shipped
+    )
 
 
 @app.post("/v1/backends/{name}/load", response_model=BackendLifecycleResponse)

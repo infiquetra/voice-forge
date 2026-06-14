@@ -38,17 +38,19 @@ class ForgeApp extends ForgeElement {
 
   async _load() {
     try {
-      const [backends, voices] = await Promise.all([
+      const [backends, voices, capabilities] = await Promise.all([
         fetch("/v1/backends").then((r) => (r.ok ? r.json() : null)),
         fetch("/v1/audio/voices").then((r) => (r.ok ? r.json() : null)),
+        fetch("/v1/capabilities").then((r) => (r.ok ? r.json() : null)),
       ]);
-      // Both endpoints answer with an OpenAI-style {data:[…]} envelope
+      // The list endpoints answer with an OpenAI-style {data:[…]} envelope
       // (VoicesList / BackendsList). Normalize to bare arrays here — the one
       // place that knows the wire shape — so every component reads a clean
       // store.voices / store.backends array, never re-derives the envelope.
-      store.set({ backends: asList(backends), voices: asList(voices) });
+      // /v1/capabilities is a flat object (design-readiness) — kept as-is.
+      store.set({ backends: asList(backends), voices: asList(voices), capabilities });
     } catch {
-      store.set({ backends: [], voices: [] });
+      store.set({ backends: [], voices: [], capabilities: null });
     }
   }
 

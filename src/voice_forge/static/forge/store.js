@@ -9,8 +9,11 @@
  */
 
 const _state = {
-  // capability snapshot from GET /v1/backends (drives the capability-aware door)
-  backends: null,
+  // installed backends (GET /v1/backends → normalized array) — per-backend
+  // installed/tunables; clone-availability is derived from these.
+  backends: [],
+  // design-readiness snapshot (GET /v1/capabilities) — drives the cold-start door
+  capabilities: null,
   // registry voices (GET /v1/audio/voices)
   voices: [],
   // the voice currently in focus (id) — the inspector + serve console follow it
