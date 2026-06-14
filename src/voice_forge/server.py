@@ -36,10 +36,18 @@ from typing import Literal
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__, config, lab_state, metrics
+from .backend_inference import infer_backend
 from .backends import available_backends, get_backend, known_backends, load_backend_module
 from .persona_coverage import ensure_full_coverage
 from .registry import Registry
@@ -169,6 +177,47 @@ def _registry() -> Registry:
     return Registry()
 
 
+def _is_backend_installed(name: str) -> bool:
+    """True if the backend's extra is importable on this host.
+
+    Factored out of ``list_backends``'s installed-probe so the
+    ``/v1/forge/infer-backend`` endpoint shares the same detection logic
+    (load the module to trigger registration, then resolve the class).
+    """
+    try:
+        load_backend_module(name)
+        get_backend(name)
+        return True
+    except (ImportError, KeyError):
+        return False
+
+
+def _require_elevenlabs() -> str:
+    """Return the EL API key, or raise a clean 503 with how-to-enable.
+
+    NEVER a 500. Mirrors ``capabilities.elevenlabs_configured`` so the gate the
+    Forge UI probes and the gate the endpoints enforce are the same signal.
+
+    Gate-first is load-bearing: the two elevenlabs modules raise *different*
+    exceptions when no key is configured (``voice_design`` → ``RuntimeError``,
+    ``voice_lab`` → ``ValueError``), and FastAPI would surface a bare
+    ``RuntimeError`` as a 500. Pre-checking here guarantees a 503 on the
+    no-key path before any call reaches those modules.
+    """
+    key = os.environ.get("ELEVENLABS_API_KEY")
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ElevenLabs Voice Design is not configured. Set the "
+                "ELEVENLABS_API_KEY environment variable and restart "
+                "voice-forge to enable design-from-description. "
+                "(Local design model #60 not yet shipped.)"
+            ),
+        )
+    return key
+
+
 # ----- Schemas -----
 
 
@@ -206,6 +255,27 @@ class VoicesList(BaseModel):
     data: list[VoiceInfo]
 
 
+class PersonaBindRequest(BaseModel):
+    """PUT body for /voices/{id}/persona. ``None``/empty clears the explicit binding."""
+
+    persona: str | None = None
+
+
+class BackendBindRequest(BaseModel):
+    """PUT body for /voices/{id}/backend. Backend is required (no clear/unset)."""
+
+    backend: str = Field(..., description="Backend name to route this voice through")
+
+
+class PersonaGroup(BaseModel):
+    persona: str
+    voices: list[str]
+
+
+class PersonaList(BaseModel):
+    personas: list[PersonaGroup]
+
+
 class FromElevenLabsRequest(BaseModel):
     voice_id: str
     elevenlabs_voice_id: str
@@ -218,6 +288,65 @@ class FromElevenLabsRequest(BaseModel):
     auto_trim: bool = True
     language: str = "en"
     overwrite: bool = False
+
+
+# Default sentence the design previews speak so candidates are comparable.
+SAMPLE_TEXT_DEFAULT = (
+    "The quick brown fox jumps over the lazy dog. "
+    "I can speak clearly across a range of expression."
+)
+
+
+class DesignRequest(BaseModel):
+    """POST /v1/forge/design — freeform description → N preview candidates."""
+
+    description: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Freeform voice description (EL Voice Design prompt)",
+    )
+    sample_text: str | None = Field(
+        default=None,
+        max_length=500,  # bound the upstream EL payload, mirroring description's cap
+        description="Sentence the previews speak; server default if omitted",
+    )
+    voice_id: str | None = Field(
+        default=None,
+        description="Intended final voice_id (echoed for client convenience)",
+    )
+
+
+class DesignCandidate(BaseModel):
+    generated_voice_id: str
+    audio: str = Field(..., description="data:audio/mpeg;base64,... — playable contact-sheet src")
+    label: str
+
+
+class DesignResponse(BaseModel):
+    candidates: list[DesignCandidate]
+    description: str  # echoed so /pick can carry it back
+    voice_name: str  # suggested name (== voice_id or a slug); client may override
+
+
+class PickRequest(BaseModel):
+    """POST /v1/forge/pick — persist one candidate as a BOUND voice-forge voice."""
+
+    generated_voice_id: str = Field(..., description="Ephemeral ID from /design candidate")
+    description: str = Field(..., description="Carried back from /design (EL voice_description)")
+    voice_id: str = Field(..., description="Final voice-forge registry id (born bound)")
+    voice_name: str | None = Field(
+        default=None, description="EL library name; defaults to voice_id"
+    )
+    persona: str | None = Field(default=None, description="Persona to bind at creation")
+    backend: str | None = Field(default=None, description="Override; else U6/default inference")
+    accent_distinct: bool = Field(
+        default=False, description="Route via U6 infer_backend when backend omitted"
+    )
+    language: str = Field(default="en")
+    max_seconds: float = Field(default=14.0)
+    auto_trim: bool = Field(default=True)
+    overwrite: bool = Field(default=False)
 
 
 # ----- Helpers -----
@@ -432,6 +561,32 @@ class BackendsList(BaseModel):
     data: list[BackendInfo]
 
 
+class Capabilities(BaseModel):
+    """What the studio can do *right now* — drives the Forge cold-start door (R7).
+
+    Design-from-description readiness is a cloud-key / future-local-model question,
+    not a per-backend fact, so it lives here rather than on ``/v1/backends`` (which
+    the client also normalizes to a bare list, dropping any top-level flag).
+
+    ``elevenlabs_configured`` — an ``ELEVENLABS_API_KEY`` is in the environment, so
+        the v1 design path can route to ElevenLabs Voice Design.
+    ``design_local`` — a fully-local design-from-description model is available
+        (Qwen3-TTS-VoiceDesign, QUEUED #60). ``False`` until that ships; it's the
+        flag that flips *describe* from cloud-gated to always-on. Clone-availability
+        is derived client-side from the per-backend ``installed`` flags.
+    """
+
+    elevenlabs_configured: bool = False
+    design_local: bool = False
+
+
+class InferBackendResponse(BaseModel):
+    """Cold-start one-tap backend recommendation for the Forge clone-create path."""
+
+    backend: str
+    why: str
+
+
 class BackendDefaultRequest(BaseModel):
     backend: str = Field(..., description="Backend name to make the new default")
 
@@ -489,6 +644,38 @@ async def list_backends() -> BackendsList:
             )
         )
     return BackendsList(data=out)
+
+
+@app.get("/v1/capabilities", response_model=Capabilities)
+async def capabilities() -> Capabilities:
+    """Capability probe for the Forge cold-start door (closes review P2 F2).
+
+    The empty-state hero asks this to decide its primary door: with a design path
+    (cloud key or local model) *describe* is the hero and *clone* the secondary;
+    without one *clone* is the hero and *describe* is gated with how-to-enable.
+    """
+    return Capabilities(
+        elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
+        design_local=False,  # local design-from-description (#60) not yet shipped
+    )
+
+
+@app.get("/v1/forge/infer-backend", response_model=InferBackendResponse)
+async def forge_infer_backend(accent_distinct: bool = False) -> InferBackendResponse:
+    """Recommend a clone backend for the Forge cold-start one-tap.
+
+    ``accent_distinct=true`` routes to an installed LLM-backbone backend
+    (preserves non-default accent); otherwise returns the system default.
+    The chosen backend is a recommendation — the client may override it via the
+    per-voice backend on POST /voices/{id} or PUT /voices/{id}/backend.
+    """
+    installed = [name for name in known_backends() if _is_backend_installed(name)]
+    backend, why = infer_backend(
+        accent_distinct=accent_distinct,
+        installed=installed,
+        default=config.get_default_backend(),
+    )
+    return InferBackendResponse(backend=backend, why=why)
 
 
 @app.post("/v1/backends/{name}/load", response_model=BackendLifecycleResponse)
@@ -652,6 +839,8 @@ async def get_voice(voice_id: str) -> VoiceInfo:
         v = registry.get(voice_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,
@@ -673,9 +862,15 @@ async def register_voice(
     backend: str | None = Form(default=None),
     language: str = Form(default="en"),
     description: str = Form(default=""),
+    persona: str | None = Form(default=None),
     overwrite: bool = Form(default=False),
 ) -> VoiceInfo:
-    """Register a new voice from an uploaded ref WAV."""
+    """Register a new voice from an uploaded ref WAV.
+
+    Pass ``persona`` to bind the voice to an agent persona at creation (the
+    canonical "forge a persona's voice" path); omit it to fall back to the
+    derived persona.
+    """
     # Save upload to a unique temp file. registry.register will copy it
     # into the canonical store, so we delete the temp in the finally
     # block — prevents /tmp from growing over the life of the process.
@@ -703,20 +898,26 @@ async def register_voice(
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         registry = _registry()
+        meta = {"language": language, "description": description}
+        if persona:
+            meta["persona"] = persona
         try:
             v = registry.register(
                 voice_id=voice_id,
                 ref_audio_path=tmp_path,
                 ref_text=ref_text,
                 backend=backend_resolved,
-                metadata={"language": language, "description": description},
+                metadata=meta,
                 overwrite=overwrite,
             )
         except FileExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return VoiceInfo(
             id=v.voice_id,
             backend=v.backend,
+            persona=v.persona,
             language=v.metadata.get("language"),
             description=v.metadata.get("description"),
             metadata=v.metadata,
@@ -758,6 +959,151 @@ async def pull_from_elevenlabs(req: FromElevenLabsRequest) -> VoiceInfo:
         )
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return VoiceInfo(
+        id=v.voice_id,
+        backend=v.backend,
+        persona=v.persona,
+        language=v.metadata.get("language"),
+        description=v.metadata.get("description"),
+        metadata=v.metadata,
+    )
+
+
+@app.post("/v1/forge/design", response_model=DesignResponse)
+async def forge_design(req: DesignRequest) -> DesignResponse:
+    """The Forge: freeform description → N preview candidates (ElevenLabs Voice Design).
+
+    Stateless: candidate MP3s are returned inline as ``data:audio/mpeg;base64,...``
+    URIs (no served temp files, no disk session). The client carries each
+    candidate's ``generated_voice_id`` back into ``POST /v1/forge/pick`` to persist
+    the chosen one — the ephemeral ID round-trips client-side, the API key never
+    leaves the server.
+    """
+    import base64
+
+    api_key = _require_elevenlabs()  # gate FIRST → clean 503, never 500
+
+    from .voice_design.elevenlabs import ElevenLabsError, create_voice_previews
+
+    sample_text = req.sample_text or SAMPLE_TEXT_DEFAULT
+    try:
+        previews = await run_in_threadpool(
+            create_voice_previews,
+            req.description,
+            sample_text,
+            api_key=api_key,
+        )
+    except ElevenLabsError as exc:
+        # Log the full upstream error server-side; return a generic detail so the
+        # client never sees ElevenLabs' raw response body (account/quota text).
+        logger.warning("ElevenLabs design failed: %s", exc)
+        raise HTTPException(
+            status_code=502, detail="ElevenLabs design failed (upstream error)"
+        ) from exc
+
+    candidates = [
+        DesignCandidate(
+            generated_voice_id=p.generated_voice_id,
+            audio="data:audio/mpeg;base64," + base64.b64encode(p.audio).decode("ascii"),
+            label=f"Candidate {i}",
+        )
+        for i, p in enumerate(previews, start=1)
+    ]
+    return DesignResponse(
+        candidates=candidates,
+        description=req.description,
+        voice_name=req.voice_id or "designed-voice",
+    )
+
+
+@app.post("/v1/forge/pick", response_model=VoiceInfo, status_code=201)
+async def forge_pick(req: PickRequest) -> VoiceInfo:
+    """The Forge: persist a chosen design candidate as a BOUND voice-forge voice.
+
+    Three-step chain, born bound: persist the ephemeral preview → permanent EL
+    voice (``create_voice_from_preview``), pull a ref WAV from that EL voice (the
+    same ``pull_and_prepare`` pipeline ``/voices/from-elevenlabs`` uses), then
+    register it with persona + design provenance in metadata. Backend is the
+    explicit override, else U6 inference, else the system default.
+    """
+    api_key = _require_elevenlabs()  # gate FIRST → clean 503, never 500
+
+    from .voice_design.elevenlabs import ElevenLabsError, create_voice_from_preview
+    from .voice_lab.elevenlabs import pull_and_prepare
+
+    # 1. Persist the chosen preview → permanent EL voice_id.
+    try:
+        el_voice_id = await run_in_threadpool(
+            create_voice_from_preview,
+            req.voice_name or req.voice_id,  # voice_name
+            req.description,  # description
+            req.generated_voice_id,  # generated_voice_id
+            api_key=api_key,
+        )
+    except ElevenLabsError as exc:
+        logger.warning("ElevenLabs persist failed: %s", exc)
+        raise HTTPException(
+            status_code=502, detail="ElevenLabs persist failed (upstream error)"
+        ) from exc
+
+    # 2. Pull a ref WAV from that EL voice (same pipeline pull_from_elevenlabs uses).
+    trim = req.max_seconds if req.auto_trim else None
+    try:
+        wav_path, ref_text = await run_in_threadpool(
+            pull_and_prepare,
+            el_voice_id,
+            api_key,
+            trim,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        # pull_and_prepare lazily imports Whisper for trim/transcribe; a missing
+        # extra must read as a clean 503, not an opaque 500 (gate-first discipline).
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Preparing the designed voice needs Whisper — "
+                f'pip install "voice-forge-tts[voice-lab]". ({exc})'
+            ),
+        ) from exc
+
+    # 3. Pick backend: explicit override → U6 inference → default.
+    if req.backend:
+        backend = req.backend
+    else:
+        installed = [name for name in known_backends() if _is_backend_installed(name)]
+        backend, _why = infer_backend(
+            accent_distinct=req.accent_distinct,
+            installed=installed,
+            default=config.get_default_backend(),
+        )
+
+    # 4. Register — BOUND at creation (persona + design provenance in metadata).
+    registry = _registry()
+    meta = {
+        "language": req.language,
+        "description": req.description,
+        "source": f"elevenlabs-design:{el_voice_id}",
+    }
+    if req.persona:
+        meta["persona"] = req.persona
+    try:
+        v = registry.register(
+            voice_id=req.voice_id,
+            ref_audio_path=wav_path,
+            ref_text=ref_text,
+            backend=backend,
+            metadata=meta,
+            overwrite=req.overwrite,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return VoiceInfo(
         id=v.voice_id,
         backend=v.backend,
@@ -774,6 +1120,77 @@ async def delete_voice(voice_id: str):
     registry = _registry()
     registry.delete(voice_id)
     return Response(status_code=204)
+
+
+@app.put("/voices/{voice_id}/persona", response_model=VoiceInfo)
+async def bind_persona(voice_id: str, req: PersonaBindRequest) -> VoiceInfo:
+    """Bind a voice to a persona (1:1). ``persona: null`` clears the explicit binding.
+
+    The design->bind->serve seam: makes the persona a first-class, persisted
+    registry property instead of a fleet-file edit (the field existed but had no
+    setter). Persona names are not enforced globally unique in v1.
+    """
+    registry = _registry()
+    try:
+        v = registry.set_persona(voice_id, req.persona)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return VoiceInfo(
+        id=v.voice_id,
+        backend=v.backend,
+        persona=v.persona,
+        language=v.metadata.get("language"),
+        description=v.metadata.get("description"),
+        metadata=v.metadata,
+    )
+
+
+@app.put("/voices/{voice_id}/backend", response_model=VoiceInfo)
+async def bind_backend(voice_id: str, req: BackendBindRequest) -> VoiceInfo:
+    """Override a single voice's backend in place. Mirrors bind_persona's shape.
+
+    Validates the backend is known (400 otherwise), then rewrites only
+    metadata['backend'] — ref audio, persona, and sampling are preserved.
+    Does NOT re-route other voices or change the system default. 400 (unknown
+    backend) takes precedence over 404 (missing voice).
+    """
+    if req.backend not in known_backends():
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown backend {req.backend!r}; known: {known_backends()}",
+        )
+    registry = _registry()
+    try:
+        v = registry.set_backend(voice_id, req.backend)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return VoiceInfo(
+        id=v.voice_id,
+        backend=v.backend,
+        persona=v.persona,
+        language=v.metadata.get("language"),
+        description=v.metadata.get("description"),
+        metadata=v.metadata,
+    )
+
+
+@app.get("/v1/personas", response_model=PersonaList)
+async def list_personas() -> PersonaList:
+    """List personas and the voices bound to each (the persona-centric registry view)."""
+    registry = _registry()
+    groups: dict[str, list[str]] = {}
+    for v in registry.list():
+        if (
+            v.persona
+        ):  # only voices actually bound to a persona (and keeps the key str, not str|None)
+            groups.setdefault(v.persona, []).append(v.voice_id)
+    return PersonaList(
+        personas=[PersonaGroup(persona=p, voices=sorted(vs)) for p, vs in sorted(groups.items())]
+    )
 
 
 # ---- /lab persistence layer ----
@@ -930,6 +1347,8 @@ async def get_voice_reference(voice_id: str) -> FileResponse:
         v = registry.get(voice_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"voice {voice_id!r} not in registry") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not v.ref_audio_path or not Path(v.ref_audio_path).is_file():
         raise HTTPException(
             status_code=404,
@@ -942,6 +1361,30 @@ async def get_voice_reference(voice_id: str) -> FileResponse:
 
 _DEMO_HTML_PATH = Path(__file__).resolve().parent / "static" / "live_demo.html"
 _LAB_HTML_PATH = Path(__file__).resolve().parent / "static" / "lab.html"
+
+# ---- The Forge (/forge) — empty-state-first voice-design studio ----
+#
+# No-build Web Components: vanilla custom elements + native ES modules + design
+# tokens, served as plain static assets straight from the package (zero Node,
+# zero bundler, nothing vendored). The whole studio ships in the wheel under
+# static/forge/ and runs offline. /lab stays as the legacy power-user surface.
+_FORGE_DIR = Path(__file__).resolve().parent / "static" / "forge"
+if _FORGE_DIR.is_dir():
+    # html=True serves index.html at /forge/ and every module/asset under /forge/*.
+    app.mount("/forge", StaticFiles(directory=_FORGE_DIR, html=True), name="forge")
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Front door: bare root redirects to the Forge studio.
+
+    ``voice-forge serve`` users open ``http://<host>:<port>/`` and land in
+    the studio. 307 (temporary) — keep ``/`` reroutable; the front door may
+    move (e.g. a chooser page or SPA-at-root) and 308 would get cached
+    permanently by browsers. /lab and /demo remain reachable by their own
+    paths (KTD7: /lab stays).
+    """
+    return RedirectResponse(url="/forge/", status_code=307)
 
 
 @app.get("/demo", response_class=HTMLResponse)

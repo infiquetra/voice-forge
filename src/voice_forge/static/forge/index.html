@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" data-density="calm">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Forge — voice-forge</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--forge-bg);
+        color-scheme: dark;
+      }
+      /* Pre-paint shell so first paint is already dark-studio, never a white flash. */
+      forge-app:not(:defined) {
+        display: block;
+        min-height: 100vh;
+        background: var(--forge-bg);
+      }
+    </style>
+    <!-- No build step: native ES modules, vanilla custom elements, nothing vendored. -->
+    <script type="module" src="./forge-app.js"></script>
+  </head>
+  <body>
+    <forge-app></forge-app>
+  </body>
+</html>

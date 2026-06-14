@@ -12,12 +12,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
 from ..backends import VoiceRef
 
 DEFAULT_REGISTRY_PATH = "~/.voice-forge/voices"
+
+# A voice_id becomes a directory name under the registry root, so it MUST be a
+# safe slug. Without this, a body-supplied id like "../escape" or "/etc/x" (which
+# bypasses URL-path normalization) would let register()/set_*() write files
+# anywhere the server can — a path-traversal / arbitrary-write primitive. First
+# char alphanumeric; the rest [A-Za-z0-9._-]. Rejects "."/".."/slashes/empty.
+_VOICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _validate_voice_id(voice_id: str) -> str:
+    """Reject any voice_id that isn't a safe single-segment slug. Raises ValueError."""
+    if not isinstance(voice_id, str) or not _VOICE_ID_RE.match(voice_id):
+        raise ValueError(
+            f"invalid voice_id {voice_id!r}: must match {_VOICE_ID_RE.pattern} "
+            "(a single path-safe slug, no '/' or '..')"
+        )
+    return voice_id
 
 
 def _resolve_default_root() -> Path:
@@ -27,7 +45,13 @@ def _resolve_default_root() -> Path:
 
 
 def _voice_dir(root: Path, voice_id: str) -> Path:
-    """Per-voice directory inside the registry root."""
+    """Per-voice directory inside the registry root.
+
+    Validates the id first — this is the single chokepoint every per-voice op
+    (register/get/set_persona/set_backend/delete/tune) routes through, so the
+    traversal guard lives here and covers them all.
+    """
+    _validate_voice_id(voice_id)
     return root / voice_id
 
 
@@ -190,5 +214,49 @@ class Registry:
             existing = dict(meta.get("sampling") or {})
             existing.update(sampling_overrides)
             meta["sampling"] = existing
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+        return _load_voice(voice_dir)
+
+    def set_persona(self, voice_id: str, persona: str | None) -> VoiceRef:
+        """Bind a voice to a persona (1:1) by writing ``metadata['persona']``.
+
+        Mirrors :meth:`tune`'s metadata-block write. ``persona=None`` (or empty)
+        clears the *explicit* binding, reverting to the derived persona
+        (:func:`_derive_persona`) — so the existing fleet's derived personas are
+        never disturbed; only the explicit override is added or removed.
+
+        Raises KeyError if the voice is missing.
+        """
+        voice_dir = _voice_dir(self.root, voice_id)
+        if not voice_dir.exists():
+            raise KeyError(f"voice not in registry: {voice_id!r}")
+        meta_path = voice_dir / "metadata.json"
+        meta = json.loads(meta_path.read_text())
+        if persona:
+            meta["persona"] = persona
+        else:
+            meta.pop("persona", None)
+        meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+        return _load_voice(voice_dir)
+
+    def set_backend(self, voice_id: str, backend: str) -> VoiceRef:
+        """Change a registered voice's backend in place (metadata-only edit).
+
+        Mirrors :meth:`set_persona`: rewrites ``metadata['backend']`` and nothing
+        else — ref.wav, ref.txt, persona, and the sampling block are untouched.
+        Does NOT validate that ``backend`` is known/installed; the REST layer
+        validates against ``known_backends()`` before calling (parallel to
+        set_default_backend's contract).
+
+        Raises KeyError if the voice is missing. Raises ValueError on empty backend.
+        """
+        if not backend or not isinstance(backend, str):
+            raise ValueError(f"backend must be a non-empty string, got {backend!r}")
+        voice_dir = _voice_dir(self.root, voice_id)
+        if not voice_dir.exists():
+            raise KeyError(f"voice not in registry: {voice_id!r}")
+        meta_path = voice_dir / "metadata.json"
+        meta = json.loads(meta_path.read_text())
+        meta["backend"] = backend
         meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
         return _load_voice(voice_dir)

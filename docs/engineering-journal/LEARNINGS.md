@@ -25,6 +25,62 @@
 
 ---
 
+## 2026-06-14 (The Forge — two no-build-component traps + the capstone review)
+
+### `node --check` passes corrupt template literals; and dispatch-then-mutate loses the event when the mutation re-renders you
+
+**Context.** Two non-obvious bugs surfaced at the U10/review stage of The Forge, both invisible to the JS syntax gate and only caught by loading the module in a real browser. Recorded because both are easy to reintroduce in the no-build vanilla-component model.
+
+**Evidence.** (1) A spawned agent put a backtick-quoted word (`` `forwards` ``) inside a CSS *comment* that lived in a `styles()` **template literal**. The backticks closed the template string early → `Uncaught SyntaxError: Unexpected identifier` → ALL forge ES modules failed to load → blank studio. `node --check` *passed* it (the file was still parseable JS, just semantically a different program). Fixed by removing the backticks; caught only via the preview console. (2) `forge-voice-card`'s serve button did `store.set({focused:id})` (which re-renders the shell and *detaches this card*) and THEN `this.dispatchEvent(forge-serve…)` — firing from a now-detached node, so the bubbling+composed event never reached the shell host and the serve action silently did nothing (commit `efdd518`). Reordering to dispatch-first fixed it.
+
+**Mechanism.** (1) A template literal has no "this is inside a comment" awareness — any backtick in the string body, even in `/* … */`, terminates it. `node --check` validates *syntax*, and the truncated-then-resumed source is still syntactically valid, so it can't catch a semantic corruption that changes what the program *is*. (2) Under the base class's full-`innerHTML`-on-observed-change model, writing a store key an ancestor observes destroys the current element subtree synchronously; any work the handler does *after* that write runs on a detached node — DOM events from a node not connected to the document don't propagate to connected ancestors.
+
+**Fix.** Both fixed + browser-verified. Added to the team conventions: never put a backtick inside a `styles()`/render() template-literal string (use plain words in comments); in an event handler, dispatch outward-bound events BEFORE any store mutation that could re-render/detach you.
+
+**Generalizable rule.** (a) `node --check` is a *syntax* gate, not a correctness gate — a no-build component is only verified once it has actually loaded + rendered in a browser; keep the browser smoke in the loop. (b) In a full-re-render reactivity model, order side effects "emit first, mutate last": anything you must signal outward has to leave the element before you trigger the render that detaches it. (c) Capstone value: a bounded 3-lens adversarial review (security/XSS, no-build/arch, correctness/dead-code) over the *whole branch diff* caught a real P1 path-traversal (unsanitized body voice_id → `root / voice_id` arbitrary write) + a P1 "feature wired but unreachable" (clone never sent accent_distinct, so U6 never fired) that per-unit verification missed — fresh eyes on the integrated whole find cross-unit gaps.
+
+**Refs.** Review run `wf_e3e15f0e`; fixes commit `efdd518`; the API-envelope + bounded-workflow LEARNINGS below.
+
+---
+
+## 2026-06-14 (The Forge — bounded workflow for the clone-create path)
+
+### A rate-limit-safe workflow shape: 2-concurrent read-only investigate → sequential writes → validate; and verify its green, don't trust it
+
+**Context.** Built U6 (backend-inference) + the clone-create wiring via a background cc-workflow after two operator corrections: use the workflow (not inline), but design it so concurrency doesn't trip the API rate limit. An earlier 7-wide build fan-out had throttled (6/7 agents' final calls failed).
+
+**Evidence.** Workflow `wf_8d7f8eb4` (commits `267028f`, `57632ce`): phases were Investigate (2 read-only agents in parallel) → Build server (1 agent) → Wire client (1 agent) → Validate (1 agent). Peak concurrency 2; all file writes serialized. 5 agents, ~363k subagent tokens, 0 throttle errors. Two things the agents got right by reading the code instead of the handed-down spec: the multipart field is `ref_audio` not `file`, and register is `POST /voices/{id}` (no `/v1`). The validate agent self-reported "62 passed / GREEN"; I re-ran the suite myself (62), re-ran `node --check` + `ruff`, then runtime-verified every endpoint against a restarted server (infer f5/higgs; a real WAV → bound card; override neutts→f5 persisted to the registry; the keyless 503 handled gracefully) before committing.
+
+**Mechanism.** Rate limits are a function of *peak concurrent* agent calls, not total. A wide `parallel()` barrier spikes peak; a pipeline of `await`-ed sequential stages with a small parallel investigate phase keeps peak ≤2 while still using the workflow for everything. Shared-file work (`server.py`) *must* serialize anyway — sequential is the correct shape, not a fallback to inline. Separately: a workflow's own validation agent is still an unverified claim; the only ground truth is re-running the commands and exercising the result yourself.
+
+**Generalizable rule.** (a) Design workflows around *peak concurrency*: parallelize only read-only/independent phases (≤2–3), serialize every phase that writes a shared file — that alone prevents throttling without abandoning the workflow. (b) Tell investigation agents to trust the code over the spec and report deviations; they catch real contract errors (field names, route prefixes) a hand-written spec guesses wrong. (c) A workflow reporting "green" is a claim to verify, not a result to trust — re-run tests + runtime-check before committing its output.
+
+**Refs.** Memory `api-throttling-discipline`; work-session `docs/work-sessions/2026-06-14-the-forge.md`; the API-envelope LEARNING below (same "verify, don't assert" theme).
+
+---
+
+## 2026-06-14 (The Forge — first browser run of the new studio)
+
+### A no-build component studio built against an *assumed* API shape breaks the moment real data arrives — only serving it reveals it
+
+**Context.** Built the 7 `<forge-*>` components + shell over several units, all guarded by `node --check` + pytest endpoint/registry tests, all green. The first time the page was actually served (`voice-forge serve` → `/forge` in a browser) two bugs surfaced that every prior test had missed, because both only manifest at runtime against the real server contract.
+
+**Evidence.** Commit `39fa39f`, found via `mcp__Claude_Preview` driving `http://127.0.0.1:9876/forge/`. (1) `GET /v1/audio/voices` / `GET /v1/backends` return an OpenAI-style `{data:[…]}` envelope (server.py `VoicesList`/`BackendsList` at :206/:447; `VoiceInfo.id` at :198, `BackendInfo.{name,installed,is_default,tunables}` at :436) — the client assumed `{voices:[…]}` / `{backends:[…]}` and stored the raw envelope object as `store.voices`. With no backends installed the dev registry exposes `{data:[]}`, so the *empty* path looked fine; the fleet path was broken and unseen. (2) `forge-waveform._setPlaying` wrote `store.forging` on every play; the card and shell both `observe` `forging` and the vanilla base class replaces the whole `innerHTML` on any observed-key change → the playing `<forge-waveform>` was destroyed the instant it started.
+
+**Mechanism.** Bug 1: tests asserted *my* shape, never the server's — a closed loop. The `{data:[]}` empty-registry response is shape-compatible with "no voices" under either assumption, so the empty-state tests passed and hid the divergence. Bug 2: full-`innerHTML`-on-change reactivity means **any** store key a component observes is a re-render trigger that tears down that component's entire subtree; a child writing a parent-observed key is a self-destruct. `store.forging` was overloaded as both "synthesis in flight" (wanted: skeleton face) and "a take is playing" (unwanted side effect).
+
+**Fix.** Commit `39fa39f`. (1) One `asList()` normalizer in `base.js` at the `_load` boundary; consumers read a canonical bare array. (2) Playback is local (`refresh()` only, no store write); `forging` dropped from the shell's `observe`. Guards `test_load_normalizes_data_envelope` + `test_playback_does_not_trigger_global_rerender` lock both.
+
+**Validation.** Live browser run: empty registry → cold-forge hero, clone-primary + describe-gated door (AE1); synthetic loaded fleet → forged + bound faces, a 440Hz take that **plays and stays mounted** (`sameElement:true, playing:true`), spec-editor knobs from the real tunables schema, serve console with the live call. Zero console errors.
+
+**What surprised.** `node --check` + endpoint tests gave full green while the studio was unusable with real data. The empty-state passing is what made it *look* safe.
+
+**Generalizable rule.** (a) Test the **server's** response shape, not the client's assumption — pin a contract test to the real payload, and never trust an empty/degenerate response to validate a populated path. (b) Under full-innerHTML reactivity, a component must **never write a store key an ancestor observes** while it owns live imperative state (audio, focus, scroll) — that state lives outside the render and a re-render destroys it. Don't overload one signal for two meanings.
+
+**Refs.** [DECISIONS.md](DECISIONS.md) 2026-06-14 "The Forge v1"; work-session `docs/work-sessions/2026-06-14-the-forge.md`; QUEUED fine-grained-update refinement.
+
+---
+
 ## 2026-05-26 (evening — TTS architecture audit)
 
 ### F5-TTS cannot preserve heavy non-default accents — architectural ceiling, not a tunable
