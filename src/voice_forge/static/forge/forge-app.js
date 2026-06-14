@@ -456,7 +456,9 @@ class ForgeApp extends ForgeElement {
     // (describe vs clone, gated by what's installed) over a cold forge that
     // warms when the first voice lands. Self-contained — reads store itself and
     // emits forge-design / forge-clone for the shell to route.
-    return `<forge-empty-hero></forge-empty-hero>`;
+    // seed-src points at the bundled first-paint clip (KTD6) so the empty state
+    // is audible before the user touches anything — shipped under /forge/.
+    return `<forge-empty-hero seed-src="seed.mp3"></forge-empty-hero>`;
   }
 
   _fleet(voices) {

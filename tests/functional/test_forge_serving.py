@@ -72,6 +72,17 @@ def test_shell_registers_component_layer() -> None:
         assert f'"./{component}"' in shell, f"shell does not import {component}"
 
 
+def test_seed_clip_serves_and_is_wired(client: TestClient) -> None:
+    # U7/KTD6 — the bundled first-paint clip makes the cold start audible. It must
+    # ship + serve as real audio, and the shell must point the hero at it.
+    r = client.get("/forge/seed.mp3")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/")
+    assert len(r.content) > 1000  # a real clip, not an empty/placeholder file
+    shell = (FORGE_DIR / "forge-app.js").read_text(encoding="utf-8")
+    assert 'seed-src="seed.mp3"' in shell, "the hero is not wired to the seed clip"
+
+
 def test_legacy_lab_still_serves(client: TestClient) -> None:
     # /lab stays as the legacy power-user surface (KTD7) — the redesign is additive.
     assert client.get("/lab").status_code == 200
