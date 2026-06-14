@@ -290,7 +290,9 @@ disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
 # Third-party packages without py.typed markers / shipped stubs. We don't
-# control them; suppress import-not-found / missing-stub noise.
+# control them; suppress import-not-found / missing-stub noise. (CI runs
+# `mypy src` WITHOUT the heavy backend extras installed, so every optional
+# backend dep must be listed here or the type gate fails on the import alone.)
 module = [
     "neutts",
     "llama_cpp",
@@ -302,6 +304,24 @@ module = [
     "TTS.*",
     "soundfile",
     "librosa",
+    "torch",
+    "transformers",
+    "transformers.*",
+    "piper",
+    "piper.*",
+    "perth",
+    "chatterbox",
+    "chatterbox.*",
+    "boson_multimodal",
+    "boson_multimodal.*",
+    "mlx_audio",
+    "mlx_audio.*",
+    "melo",
+    "melo.*",
+    "snac",
+    "huggingface_hub",
+    "yaml",
+    "psutil",
 ]
 ignore_missing_imports = true
 
