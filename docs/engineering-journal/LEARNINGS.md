@@ -25,6 +25,24 @@
 
 ---
 
+## 2026-06-14 (The Forge — two no-build-component traps + the capstone review)
+
+### `node --check` passes corrupt template literals; and dispatch-then-mutate loses the event when the mutation re-renders you
+
+**Context.** Two non-obvious bugs surfaced at the U10/review stage of The Forge, both invisible to the JS syntax gate and only caught by loading the module in a real browser. Recorded because both are easy to reintroduce in the no-build vanilla-component model.
+
+**Evidence.** (1) A spawned agent put a backtick-quoted word (`` `forwards` ``) inside a CSS *comment* that lived in a `styles()` **template literal**. The backticks closed the template string early → `Uncaught SyntaxError: Unexpected identifier` → ALL forge ES modules failed to load → blank studio. `node --check` *passed* it (the file was still parseable JS, just semantically a different program). Fixed by removing the backticks; caught only via the preview console. (2) `forge-voice-card`'s serve button did `store.set({focused:id})` (which re-renders the shell and *detaches this card*) and THEN `this.dispatchEvent(forge-serve…)` — firing from a now-detached node, so the bubbling+composed event never reached the shell host and the serve action silently did nothing (commit `efdd518`). Reordering to dispatch-first fixed it.
+
+**Mechanism.** (1) A template literal has no "this is inside a comment" awareness — any backtick in the string body, even in `/* … */`, terminates it. `node --check` validates *syntax*, and the truncated-then-resumed source is still syntactically valid, so it can't catch a semantic corruption that changes what the program *is*. (2) Under the base class's full-`innerHTML`-on-observed-change model, writing a store key an ancestor observes destroys the current element subtree synchronously; any work the handler does *after* that write runs on a detached node — DOM events from a node not connected to the document don't propagate to connected ancestors.
+
+**Fix.** Both fixed + browser-verified. Added to the team conventions: never put a backtick inside a `styles()`/render() template-literal string (use plain words in comments); in an event handler, dispatch outward-bound events BEFORE any store mutation that could re-render/detach you.
+
+**Generalizable rule.** (a) `node --check` is a *syntax* gate, not a correctness gate — a no-build component is only verified once it has actually loaded + rendered in a browser; keep the browser smoke in the loop. (b) In a full-re-render reactivity model, order side effects "emit first, mutate last": anything you must signal outward has to leave the element before you trigger the render that detaches it. (c) Capstone value: a bounded 3-lens adversarial review (security/XSS, no-build/arch, correctness/dead-code) over the *whole branch diff* caught a real P1 path-traversal (unsanitized body voice_id → `root / voice_id` arbitrary write) + a P1 "feature wired but unreachable" (clone never sent accent_distinct, so U6 never fired) that per-unit verification missed — fresh eyes on the integrated whole find cross-unit gaps.
+
+**Refs.** Review run `wf_e3e15f0e`; fixes commit `efdd518`; the API-envelope + bounded-workflow LEARNINGS below.
+
+---
+
 ## 2026-06-14 (The Forge — bounded workflow for the clone-create path)
 
 ### A rate-limit-safe workflow shape: 2-concurrent read-only investigate → sequential writes → validate; and verify its green, don't trust it

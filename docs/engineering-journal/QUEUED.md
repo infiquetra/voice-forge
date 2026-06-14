@@ -18,6 +18,30 @@
 
 ---
 
+## P2 — One-tap "distinct accent?" toggle on the clone flow
+
+**Priority.** P2 — the clone-create path currently defaults `accent_distinct=true` (route to an LLM-backbone backend when installed) because diffusion can't recover a lost accent. That's the safe default, but it over-routes neutral-accent clones to a heavier backbone.
+
+**Effort.** Half-day (touches forge-empty-hero's clone block + threading the flag through forge-clone → _onClone → infer-backend).
+
+**Worth it when.** Users complain that neutral clones land on a heavy backbone unnecessarily, OR the cold-start UX gets a polish pass. The designed behavior (KTD4) was an explicit one-tap ask; the v1 default is a stand-in.
+
+**Context.** Capstone review (2026-06-14) found U6 was unreachable (clone never sent the flag). Fixed by defaulting to true (commit `efdd518`); the proper UX is the one-tap affordance in the clone block so the user states whether the source has a distinct accent. See [LEARNINGS 2026-06-14](LEARNINGS.md).
+
+---
+
+## P3 — Decode silence-collapse peak from design-candidate data: URIs
+
+**Priority.** P3 — cosmetic robustness on the design path.
+
+**Effort.** Couple hours (decode the MP3 data: URI → peak in forge-contact-sheet `_prep`, or have the server compute + return a `silent` flag on each `DesignCandidate`).
+
+**Worth it when.** Designed previews start coming back silence-collapsed often enough that the contact-sheet's pre-greying matters for them. Today the auto silence-collapse only fires on the WS/pcm path; design candidates carry only a data: URI (no pcm), so a collapsed designed take renders as healthy.
+
+**Context.** Capstone review (2026-06-14) P3. Documented inline in forge-app `_toCandidates`.
+
+---
+
 ## P2 — Fine-grained component updates (don't rebuild the fleet on every focus)
 
 **Priority.** P2 — correctness is fine today; this is a scale + UX-polish refinement.
