@@ -13,7 +13,7 @@
  * regions in later units; here the regions and the density behaviour are real.
  */
 
-import { ForgeElement, esc } from "./base.js";
+import { ForgeElement, esc, asList } from "./base.js";
 import { store, setDensity } from "./store.js";
 
 // Register the component layer (side-effect imports define the custom elements).
@@ -26,7 +26,10 @@ import "./forge-serve-console.js";
 import "./forge-contact-sheet.js";
 
 class ForgeApp extends ForgeElement {
-  static observe = ["voices", "backends", "density", "focused", "forging"];
+  // Not "forging": the shell renders nothing off it (cards + hero own their own
+  // hot face), and re-rendering the whole fleet on every synth would needlessly
+  // rebuild every card — and tear down any take playing inside one.
+  static observe = ["voices", "backends", "density", "focused"];
 
   connectedCallback() {
     super.connectedCallback();
@@ -39,9 +42,13 @@ class ForgeApp extends ForgeElement {
         fetch("/v1/backends").then((r) => (r.ok ? r.json() : null)),
         fetch("/v1/audio/voices").then((r) => (r.ok ? r.json() : null)),
       ]);
-      store.set({ backends, voices: (voices && (voices.voices || voices)) || [] });
+      // Both endpoints answer with an OpenAI-style {data:[…]} envelope
+      // (VoicesList / BackendsList). Normalize to bare arrays here — the one
+      // place that knows the wire shape — so every component reads a clean
+      // store.voices / store.backends array, never re-derives the envelope.
+      store.set({ backends: asList(backends), voices: asList(voices) });
     } catch {
-      store.set({ backends: null, voices: [] });
+      store.set({ backends: [], voices: [] });
     }
   }
 

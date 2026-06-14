@@ -41,9 +41,8 @@ class ForgeEmptyHero extends ForgeElement {
    * table; design is the gated capability.
    */
   _designReady() {
-    const b = store.get("backends");
-    if (!b) return false;
-    const list = b.backends || b.data || (Array.isArray(b) ? b : []);
+    // store.backends is normalized to a bare array at the load boundary.
+    const list = store.get("backends") || [];
     return list.some((x) => {
       if (!x || x.installed === false) return false;
       const t = x.tunables || {};

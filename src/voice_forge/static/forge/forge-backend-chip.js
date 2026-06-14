@@ -52,8 +52,8 @@ class ForgeBackendChip extends ForgeElement {
 
   /** Installed-backends snapshot from the store (drives the option set). */
   _options() {
-    const b = store.get("backends");
-    return (b && b.backends) || [];
+    // store.backends is normalized to a bare array at the load boundary.
+    return store.get("backends") || [];
   }
 
   styles() {

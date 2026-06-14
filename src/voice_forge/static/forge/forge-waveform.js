@@ -23,7 +23,6 @@
  */
 
 import { ForgeElement, esc } from "./base.js";
-import { store } from "./store.js";
 
 // Amplitude floor below which a take is a silence-collapse, not a quiet take.
 const SILENCE_FLOOR = 0.05;
@@ -132,8 +131,11 @@ class ForgeWaveform extends ForgeElement {
   _setPlaying(on) {
     if (this._playing === on) return;
     this._playing = on;
-    // A take in flight is the same "hot" signal as a forging card (KTD-ember).
-    store.set({ forging: on });
+    // Playback is LOCAL — refresh only this chip's play/pause icon + progress.
+    // It must NOT write store.forging: cards and the shell observe that key and
+    // replace their whole innerHTML on change, which would destroy this very
+    // <forge-waveform> mid-play. store.forging means "a synthesis is in flight"
+    // (set by the serve/audition path), not "a finished take is playing back".
     this.refresh();
   }
 

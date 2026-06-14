@@ -59,8 +59,8 @@ class ForgeSpecEditor extends ForgeElement {
 
   /** The tunables schema for a voice's backend, from the backends snapshot. */
   _schema(voice) {
-    const snap = store.get("backends");
-    const list = (snap && (snap.backends || snap.data)) || [];
+    // store.backends is normalized to a bare array at the load boundary.
+    const list = store.get("backends") || [];
     const b = list.find((x) => x.name === (voice && voice.backend));
     return (b && b.tunables) || {};
   }

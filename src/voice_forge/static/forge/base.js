@@ -70,6 +70,18 @@ export class ForgeElement extends HTMLElement {
   }
 }
 
+/**
+ * Normalize a list endpoint's response to a bare array. The server answers with
+ * an OpenAI-style {data:[…]} envelope (VoicesList / BackendsList); older shapes
+ * used {voices:[…]} / {backends:[…]}. Accept any of them, plus a bare array, so
+ * the store always holds a clean array regardless of wire shape.
+ */
+export function asList(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  return payload.data || payload.voices || payload.backends || [];
+}
+
 /** Escape untrusted text for safe interpolation into render() strings. */
 export function esc(s) {
   return String(s ?? "").replace(
