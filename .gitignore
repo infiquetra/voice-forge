@@ -241,3 +241,6 @@ __marimo__/
 .claude/checkpoints/
 .claude/jobs/
 .claude/saga/
+.serena
+.neuralmind
+graphify-out
