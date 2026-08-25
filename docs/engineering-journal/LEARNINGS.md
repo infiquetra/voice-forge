@@ -25,6 +25,37 @@
 
 ---
 
+## 2026-08-25 (v0.3 release gate)
+
+### A dependency can break a type checker through stubs even when the runtime supports it
+
+**Context.** The current `main` branch was functionally complete but its latest
+Python 3.12 CI job failed before tests. Mypy 1.13 was configured to check the
+project at its supported Python 3.11 floor, while the clean environment resolved
+NumPy 2.5.
+
+**Evidence.** GitHub Actions run `28455683605` failed in `mypy src` while parsing
+NumPy's `__init__.pyi`: `Type statement is only supported in Python 3.12 and
+greater`. Ruff and Black passed first. The job used Python 3.12, but Mypy obeyed
+`python_version = "3.11"`, so Python-3.12-only syntax in a dependency stub was
+invalid for the configured target.
+
+**Mechanism.** Runtime compatibility and static-stub compatibility are separate
+contracts. An unbounded dependency may ship stubs using syntax newer than the
+oldest Python version a project promises, and an older pinned type checker must
+parse those stubs before it can check project code.
+
+**Fix.** Bound NumPy to `>=1.26,<2.5` in both the package dependencies and the
+Mypy pre-commit environment. Keep the two resolver surfaces aligned. Add a
+runtime-versus-wheel version parity test while preparing `v0.3.0`.
+
+**Generalizable rule.** A clean release gate must resolve dependencies from
+scratch on every supported Python version. When a dependency's type stubs move
+past the supported language floor, either advance the entire synchronized type
+toolchain or cap the dependency; do not suppress the project-wide type gate.
+
+---
+
 ## 2026-06-14 (CI baseline — the pre-existing red was an unwinnable linter-version war)
 
 ### Unpinned linters in `[dev]` drift ahead of the pinned pre-commit revs, so the named gate and the pre-commit gate format the same file two different ways — CI can never be green

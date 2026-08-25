@@ -62,7 +62,10 @@ Add no secrets — OIDC handles auth.
    - Tick ROADMAP boxes that landed.
    - Add LEARNINGS entries for anything surprising the release surfaced.
 
-4. **Bump version** in one place: `src/voice_forge/__init__.py:__version__`. Everything else reads from there. Confirm `pyproject.toml:version` matches.
+4. **Bump both authoritative version surfaces**:
+   `src/voice_forge/__init__.py:__version__` for runtime reporting and
+   `pyproject.toml:project.version` for wheel metadata. The unit suite enforces
+   their equality.
 
 5. **Tag and push**:
    ```bash

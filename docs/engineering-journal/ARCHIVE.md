@@ -9,6 +9,30 @@
 
 ---
 
+## SHIPPED 2026-08-25 — v0.3.0: The Forge browser studio + CI release repair
+
+**Release tag:** `v0.3.0`. **Feature merge:** `6559f4f`. **CI baseline:**
+`a5e987f` plus the release commit.
+
+The Forge is now the browser front door at `/forge/`. It covers the complete
+design-to-serving loop: describe or clone a voice, infer a suitable backend,
+generate and audition candidates, tune sampling parameters, bind the selected
+voice to a persona, and serve it through the existing API. `GET /` redirects to
+the studio, while `/lab` remains intact as the legacy power-user workstation.
+
+The release includes the integrated review repairs for registry path traversal,
+API-envelope normalization, playback-induced component teardown, clone/backend
+inference wiring, and detached-node event ordering. The interface remains a
+no-build set of static web components served directly by FastAPI.
+
+The release gate also repaired dependency drift that made the latest `main`
+commit fail in Python 3.12 continuous integration: NumPy 2.5's stubs use syntax
+that the pinned Python-3.11-targeting Mypy 1.13 gate cannot parse. NumPy is held
+below 2.5 until the synchronized Mypy and pre-commit pins advance. Runtime and
+wheel versions are now test-locked at `0.3.0`.
+
+---
+
 ## SUPERSEDED 2026-05-26 — Tune F5 voices for accent retention (#20)
 
 **From QUEUED P2 / Task #20:** "Tune F5 voices for accent retention" — the four problem Asgard voices (Mimir / Freya / Eir / Trjegul) lose their Nordic-English accent through F5 cloning. Original plan: tune `nfe_step`, `cfg_strength`, `speed`, and reference content to recover.

@@ -4,8 +4,12 @@ Doesn't actually invoke heavy backends (NeuTTS load, Whisper, etc.) since those
 need external deps. Just confirms Click wiring is sane.
 """
 
+import tomllib
+from pathlib import Path
+
 from click.testing import CliRunner
 
+from voice_forge import __version__
 from voice_forge.cli import main
 
 
@@ -13,7 +17,12 @@ def test_cli_version_works():
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.2.0" in result.output
+    assert __version__ in result.output
+
+
+def test_build_metadata_version_matches_runtime_version():
+    pyproject = tomllib.loads((Path(__file__).resolve().parents[2] / "pyproject.toml").read_text())
+    assert pyproject["project"]["version"] == __version__
 
 
 def test_cli_help_lists_subcommands():

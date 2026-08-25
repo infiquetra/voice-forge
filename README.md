@@ -4,7 +4,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![PyPI](https://img.shields.io/badge/PyPI-voice--forge--tts-blue.svg)](https://pypi.org/project/voice-forge-tts/)
-[![Status: v0.2](https://img.shields.io/badge/status-v0.2-orange.svg)](docs/ROADMAP.md)
+[![Status: v0.3](https://img.shields.io/badge/status-v0.3-orange.svg)](docs/ROADMAP.md)
 
 > **PyPI distribution name:** `voice-forge-tts` (the bare `voice-forge` name on PyPI was taken before v0.1.0 published — see [docs/engineering-journal/ARCHIVE.md](docs/engineering-journal/ARCHIVE.md)). The Python import path stays `voice_forge`.
 
@@ -14,7 +14,7 @@ voice-forge is the engine layer for "give your agent a voice". It does four thin
 
 1. **Synthesis** — text → audio via pluggable TTS backends. **F5-TTS is the default** (identity-preserving cloning, long-form coherence). Also shipped: Kokoro (preset voices), NeuTTS (short-form cloning), XTTS-v2 (multilingual, license-gated), Dia-1.6B (multi-speaker).
 2. **Cloning** — record a voice once via ref audio, replay it on any text
-3. **Voice Lab** — pull voices from ElevenLabs, trim references to clean sentence boundaries, manage a local voice library
+3. **The Forge** — design, clone, audition, tune, bind, and serve voices from the `/forge/` web studio; `/lab` remains the power-user workstation
 4. **Service surface** — OpenAI-API-compatible REST + WebSocket layer-2 streaming for LLM-driven pipelines + CLI for direct text→WAV testing
 
 ## Why it exists
@@ -45,8 +45,8 @@ apt-get install espeak-ng     # Linux
 # Run the server (default backend = f5)
 voice-forge serve --host 127.0.0.1 --port 9876
 
-# Open the live in-browser streaming demo
-open http://127.0.0.1:9876/demo
+# Open The Forge (the browser front door)
+open http://127.0.0.1:9876/forge/
 
 # Synth directly (no server) — uses the default F5 backend
 voice-forge synth example "Hello from voice-forge." /tmp/hello.wav
@@ -78,8 +78,9 @@ curl http://127.0.0.1:9876/v1/audio/speech \
 
 ## Status
 
-**v0.2.0 — SHIPPED 2026-05-25.**
+**v0.3.0 — SHIPPED 2026-08-25.**
 
+- **The Forge:** `/` redirects to `/forge/`, a no-build web-component studio for design-from-description, clone-from-reference, audition, tuning, persona binding, and serving. The existing `/lab` workstation remains available.
 - **Backends shipped:** F5-TTS (default, identity-preserving, MIT/Apache-2), Kokoro-82M (preset voices, Apache-2), NeuTTS Air (short-form cloning, Apache-2), XTTS-v2 (multilingual, MPL-2/CPML license-gated), Dia-1.6B (multi-speaker, Apache-2)
 - **APIs:** OpenAI-compatible REST (`POST /v1/audio/speech` with `stream=false` for batch + `stream=true` for HTTP chunked layer-1 streaming) + WebSocket layer-2 streaming (`WS /v1/tts/stream`) for LLM-driven pipelines + browser-accessible live demo at `GET /demo`
 - **Per-voice tuning:** sampling parameters (`nfe_step`, `cfg_strength`, `temperature`, `top_p`, etc.) overridable per voice via `voice-forge voice tune <id> --sampling KEY=VALUE`

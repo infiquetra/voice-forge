@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voice-forge-tts"
-version = "0.2.0"
+version = "0.3.0"
 description = "Pluggable TTS service for agent voices — synthesis, cloning, voice lab, registry"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -27,7 +27,10 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "pydantic>=2.6",
-    "numpy>=1.26",
+    # NumPy 2.5 ships Python-3.12-only type-alias syntax in its stubs. Mypy
+    # 1.13 checks this project at the supported Python 3.11 floor and cannot
+    # parse those stubs, so hold below 2.5 until the pinned type gate advances.
+    "numpy>=1.26,<2.5",
     "soundfile>=0.12",
     "pyyaml>=6.0",
     "click>=8.1",

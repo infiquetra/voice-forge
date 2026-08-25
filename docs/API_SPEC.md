@@ -195,7 +195,7 @@ Cardinality note: `voice_id` is a label. For small deploys (≤100 voices) fine;
 ```json
 {
   "ok": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "registry_dir": "/home/user/.voice-forge/voices",
   "voices_count": 9,
   "backends_available": ["f5", "kokoro", "neutts", "xtts", "dia"],

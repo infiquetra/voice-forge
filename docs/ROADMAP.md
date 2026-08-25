@@ -54,9 +54,18 @@
 - Proper `speed` field plumbing through `TTSBackend` Protocol → v0.3
 - Voice-mixing tensor blending → v0.3+
 
-## v0.3.0 — production hardening (mostly SHIPPED 2026-05-25)
+## v0.3.0 — production hardening + The Forge (SHIPPED 2026-08-25)
 
-**Goal:** Make voice-forge safe to expose beyond `127.0.0.1` and easy for outside users to deploy.
+**Goal:** Ship the hardened operational surfaces and the first complete Forge
+studio. Bearer-token authentication remains deferred, so network exposure still
+depends on an operator-controlled trusted-network boundary.
+
+- [x] **The Forge at `/forge/`** — the browser front door for design, clone, audition, tune, bind, and serve
+- [x] **Root redirect** — `GET /` redirects to `/forge/`; `/lab` remains available as the power-user workstation
+- [x] **Design from description** — backend inference, candidate generation, contact sheet, pick, and persistent bind
+- [x] **Clone from reference** — multipart reference upload wired to the existing voice registry
+- [x] **Audition and tuning** — live Waveform Audio playback and request-scoped sampling overrides
+- [x] **Integrated correctness and security review** — path traversal, unreachable action, API-envelope, playback, and component-lifecycle defects repaired
 
 - [x] **Quickstart tutorial** — `docs/QUICKSTART.md` (commit `74a4a9b`)
 - [x] **Pre-commit hooks + bandit** — ruff/black/mypy/bandit in CI + locally (commit `98bb395`)

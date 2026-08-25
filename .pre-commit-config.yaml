@@ -45,7 +45,7 @@ repos:
         additional_dependencies:
           - types-PyYAML
           - pydantic>=2.6
-          - numpy>=1.26
+          - numpy>=1.26,<2.5
 
   - repo: https://github.com/PyCQA/bandit
     rev: 1.8.0
