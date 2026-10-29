@@ -222,9 +222,9 @@ dev = [
     "pytest-asyncio>=0.23",
     "httpx>=0.27",  # required by fastapi.testclient.TestClient (the integration/functional suites)
     # Lint/format tools are PINNED to the exact versions the pre-commit hooks
-    # use (.pre-commit-config.yaml). The named CI gates (ruff/black/mypy/bandit)
-    # run the `[dev]`-installed tool while the pre-commit gate runs the pinned
-    # hook env; if these drift apart a new linter release silently breaks `main`
+    # use (.pre-commit-config.yaml). CI runs static checks only on Python 3.12;
+    # local `[dev]` tools must agree with those isolated environments. If these
+    # drift apart a new linter release silently breaks local/CI parity
     # (e.g. black 26.x reformats what black 24.10 considers clean). Bump these
     # and the pre-commit `rev:`s together (`pre-commit autoupdate`).
     "ruff==0.7.4",

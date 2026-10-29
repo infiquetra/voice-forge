@@ -51,6 +51,7 @@ repos:
     rev: 1.8.0
     hooks:
       - id: bandit
+        language_version: python3.12
         # -ll: only report Medium + High severity. Low is noisy on legitimate
         # patterns (subprocess + tempfile + assert) and adds friction without
         # finding real bugs in our threat model.

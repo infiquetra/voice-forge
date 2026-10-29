@@ -25,6 +25,80 @@
 
 ---
 
+## 2026-10-29 (CI ownership and dependency lock)
+
+### Compare effective hook environments before removing a named gate
+
+**Context.** At `bc64b0873738afe10d6fd52c428942787535d1e6`, both Python
+3.11/3.12 jobs ran four named static tools followed by all ten pre-commit hooks.
+Each static tool executed four times across the matrix; hygiene checks ran twice.
+Pre-commit requested Python 3.12 although each job installed only its matrix
+interpreter. Bandit's upstream hook additionally selected `python3` explicitly.
+
+**Evidence and mechanism.** All 88 original Python files under `src/tests/scripts`
+are covered by the Ruff/Black hooks; all 39 source Python files are covered by
+Mypy/Bandit. The Mypy mirror adds `--ignore-missing-imports` and its isolated
+environment has the declared PyYAML stubs/Pydantic/NumPy, while the named `mypy
+src` sees installed FastAPI/Click/cryptography and retains their missing-import
+checks. These two checks are not interchangeable. Removing the mirror's blanket
+suppression alone makes application dependencies unavailable in that environment.
+
+**Fix.** Keep both distinct Mypy checks once on explicit Python 3.12, along with
+all ten unchanged hook definitions/revisions/scopes/stubs/thresholds. Ruff, Black,
+Bandit and the six hygiene hooks now execute once through pre-commit; Bandit
+explicitly uses Python 3.12. Both original matrix job names and full test commands
+remain. Tool pins stay Ruff 0.7.4, Black 24.10.0, Mypy 1.13.0 and Bandit 1.8.0.
+This is the safer alternative to claiming that the four named gates were all
+redundant.
+
+**Dependency and cache contract.** There was no `uv.lock`; resolving the whole
+project would involve unrelated model/VCS extras. `ci/requirements.in` instead
+extracts the unchanged base/dev/build requirements. The reviewed 59-package
+hash lock preserves the staged base/dev versions, adds the build backend's
+closure, and is bound to those inputs with SHA-256. CI checks drift/malformed
+entries before hash-required, wheel-only installation, then installs the project
+with locked build tools and `--no-deps --no-build-isolation`. The project is a
+regular wheel install. Runtime constraints and optional extras are unchanged.
+Pinned setup-uv v3 has automatic caching disabled; pinned cache v4 restore/save
+actions key downloads/hook environments by OS, architecture, full interpreter,
+uv version and lock/config/validator inputs. Cache failures never skip work;
+PRs restore only and only successful main pushes save. No virtualenv is cached.
+See [CI lock maintenance](../../ci/README.md) and the official
+[restore](https://github.com/actions/cache/blob/0057852bfaa89a56745cba8c7296529d2fc39830/restore/action.yml)
+and [save](https://github.com/actions/cache/blob/0057852bfaa89a56745cba8c7296529d2fc39830/save/action.yml)
+interfaces.
+
+**Validation.** Original inventory: 329 collected tests, with existing optional
+backend/tool skip policies preserved. All original source/test files and the
+publication workflow remain byte-identical; parsed `pyproject.toml` is unchanged.
+The frozen lock installs offline on Python 3.11.17 and 3.12.3; project builds and
+`uv pip check` pass on both. Fifteen stale/malformed-lock controls pass; a fresh
+installer rejects a wrong SHA-256 and accepts the authentic hash. Actionlint,
+validator lint/format and 72 event/interpreter/cache-condition cases pass. These
+condition checks establish fallback routing, not observed hosted cache timing.
+The restricted local 3.12 suite blocks at its first TestClient request: an
+independent socket-pair send raises EPERM, preventing asyncio's cross-thread
+wakeup. Full behavioral execution and full hooks require Root's unrestricted
+validation; no dependency/test changes bypass this restriction. Independent
+review, exact-candidate hosted jobs and ordinary cache observations remain
+coordinator follow-up; no timing/billing savings are asserted. Supporting logs
+and the final changed-file SHA-256 manifest live under
+`/tmp/ci-efficiency-t12-voiceforge-evidence`.
+
+**Controls and rollback.** CI has explicit `contents: read`; triggers, branch
+policy, publishing/tag workflows, OIDC and environments are untouched. The
+approved audit recorded unprotected main and no open PRs; this unit changes no
+settings. No model/backend/GPU/MLX stack was installed. No commit, push, PR, tag,
+deployment or publication action was performed. Roll back the CI/config/comment
+edits and remove `ci/` plus `scripts/ci_dependencies.py`; retain this evidence
+entry as history.
+
+**Generalizable rule.** Compare effective arguments, file sets and dependency
+visibility before collapsing static gates. Cache installation inputs, not trust
+in a cached result, and bind a deliberately scoped CI lock to its source inputs.
+
+---
+
 ## 2026-08-25 (v0.3 release gate)
 
 ### A dependency can break a type checker through stubs even when the runtime supports it
