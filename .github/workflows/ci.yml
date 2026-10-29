@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+env:
+  UV_CACHE_DIR: ${{ github.workspace }}/.cache/uv
+  PRE_COMMIT_HOME: ${{ github.workspace }}/.cache/pre-commit
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -17,39 +24,55 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
+        id: python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+        with:
+          version: "0.13.4"
+          enable-cache: "false"
 
+      - name: Check CI dependency lock inputs
+        run: python scripts/ci_dependencies.py
+
+      - name: Restore dependency downloads
+        id: downloads
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.UV_CACHE_DIR }}
+          key: voice-forge-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-uv0.13.4-${{ hashFiles('ci/requirements.in', 'ci/requirements.txt', 'scripts/ci_dependencies.py', 'pyproject.toml', '.pre-commit-config.yaml') }}
+
+      - name: Restore pre-commit environments
+        if: matrix.python-version == '3.12'
+        id: hooks
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.PRE_COMMIT_HOME }}
+          key: voice-forge-hooks-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-uv0.13.4-${{ hashFiles('ci/requirements.in', 'ci/requirements.txt', 'scripts/ci_dependencies.py', 'pyproject.toml', '.pre-commit-config.yaml') }}
+
+      # Always install and check, including after cache misses or restore failures.
       - name: Install dependencies
         run: |
-          uv venv
-          uv pip install -e ".[dev]"
+          uv venv --python "${{ steps.python.outputs.python-path }}"
+          uv pip sync --require-hashes --only-binary :all: ci/requirements.txt
+          uv pip install --no-deps --no-build-isolation .
+          uv pip check
 
-      - name: Lint with ruff
-        run: |
-          source .venv/bin/activate
-          ruff check src tests scripts
-
-      - name: Format check with black
-        run: |
-          source .venv/bin/activate
-          black --check src tests scripts
-
+      # The isolated hook suppresses missing imports and has only its declared
+      # stubs. Keep the strict check against the installed application as well.
       - name: Type check with mypy
+        if: matrix.python-version == '3.12'
         run: |
           source .venv/bin/activate
           mypy src
 
-      - name: Security scan with bandit
-        run: |
-          source .venv/bin/activate
-          bandit -ll -c pyproject.toml -r src/
-
-      - name: Pre-commit hooks (catches anything not in the named gates above)
+      - name: Pre-commit hooks (all ten hooks)
+        if: matrix.python-version == '3.12'
         run: |
           source .venv/bin/activate
           pre-commit run --all-files --show-diff-on-failure
@@ -58,3 +81,20 @@ jobs:
         run: |
           source .venv/bin/activate
           pytest tests/ -v
+
+      # PRs restore only. Failed jobs never publish caches; release jobs do not use them.
+      - name: Save dependency downloads
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.downloads.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.UV_CACHE_DIR }}
+          key: ${{ steps.downloads.outputs.cache-primary-key }}
+
+      - name: Save pre-commit environments
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.python-version == '3.12' && steps.hooks.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.PRE_COMMIT_HOME }}
+          key: ${{ steps.hooks.outputs.cache-primary-key }}
