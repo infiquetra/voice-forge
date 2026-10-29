@@ -25,6 +25,38 @@
 
 ---
 
+## 2026-10-29 (tag version admission repair)
+
+### Commit identity and artifact integrity also need release version equality
+
+**Context.** Review of the initial qualification implementation reproduced a
+matching `v9.9.9` tag/ref/SHA being admitted with project, wheel and sdist version
+0.3.0. The tag identified the commit correctly, and the artifact digests matched,
+but no check connected the version named by the tag to the distribution version.
+
+**Fix.** Tag source admission now compares the tag and project versions using the
+same bounded PEP 440 normalization used for wheel/sdist metadata and installed
+runtime checks. The supported three-component final/a/b/rc grammar includes the
+documented legacy `-rc.N`/`-alpha.N`/`-beta.N` forms, case folding and numeric
+normalization. Unsupported/ambiguous forms fail closed. The verifier remains
+stdlib-only before build setup; project dependencies, workflow wiring and raw-tag
+destination selection are unchanged. See the exact [version contract](../RELEASING.md).
+
+**Evidence.** Two regression controls failed against the parent verifier: actual
+manifest creation and publication admission both accepted the mismatched tag.
+They now reject it. Additional disposable source/ZIP/tar fixtures exercise
+normalized final/prerelease agreement, mismatched prerelease flavor/number,
+canonical and equivalent metadata, malformed forms and source/distribution
+version disagreement. The original 96 controls remain. Accepted normalization
+variants are cross-checked against the packaging tool already in the CI lock;
+production source admission does not import it. Synthetic fixtures do not prove
+hosted or real-tag behavior. Critical delta review and full exact-candidate
+hosted qualification remain required.
+
+**Generalizable rule.** Release identity includes both the commit and the version
+named by the release. A checksum can prove that an artifact is unchanged while
+leaving that version relationship unchecked.
+
 ## 2026-10-29 (release source and artifact admission)
 
 ### Independent producer outputs authenticate a distribution bundle

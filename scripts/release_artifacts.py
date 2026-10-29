@@ -33,6 +33,33 @@ def require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
+def normalized_version(value: str) -> str:
+    """Normalize the documented three-component final/a/b/rc release subset.
+
+    PEP 440 permits case folding, integer normalization, alpha/beta aliases and
+    optional single separators. Other forms need an explicit release-contract
+    change. Keep source admission usable with system Python's stdlib alone.
+    """
+    match = (
+        re.fullmatch(
+            r"(?P<release>[0-9]+\.[0-9]+\.[0-9]+)"
+            r"(?:[-_.]?(?P<phase>alpha|beta|rc|a|b)[-_.]?(?P<number>[0-9]+))?",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if isinstance(value, str)
+        else None
+    )
+    if match is None:
+        raise ValueError("Unsupported release version; see docs/RELEASING.md")
+    version = ".".join(str(int(part)) for part in match["release"].split("."))
+    if match["phase"] is not None:
+        phase = match["phase"].lower()
+        phase = {"alpha": "a", "beta": "b"}.get(phase, phase)
+        version += phase + str(int(match["number"]))
+    return version
+
+
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -99,6 +126,11 @@ def verify_source() -> dict[str, str]:
             ref = "refs/remotes/origin/main"
         else:
             release_destination(source)
+            require(
+                normalized_version(source["ref"].removeprefix("refs/tags/v"))
+                == project_metadata()["version"],
+                "Release tag version differs from project version",
+            )
             ref = source["ref"]
         require(
             git_revision(f"{ref}^{{commit}}") == source["sha"], "Ref resolves to a different SHA"
@@ -117,17 +149,26 @@ def verify_source() -> dict[str, str]:
 def project_metadata() -> dict[str, str]:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
     require(project["name"] == PROJECT, "Unexpected project name")
-    return {key: project[key] for key in ("name", "version", "requires-python")}
+    return {
+        "name": project["name"],
+        "version": normalized_version(project["version"]),
+        "requires-python": project["requires-python"],
+    }
 
 
 def check_metadata(data: bytes, project: dict[str, str]) -> None:
     metadata = BytesParser().parsebytes(data)
     for field, key in (
         ("Name", "name"),
-        ("Version", "version"),
         ("Requires-Python", "requires-python"),
     ):
         require(metadata.get_all(field) == [project[key]], f"Bad distribution metadata: {field}")
+    versions = metadata.get_all("Version", [])
+    require(len(versions) == 1, "Bad distribution metadata: Version")
+    require(
+        normalized_version(versions[0]) == normalized_version(project["version"]),
+        "Bad distribution metadata: Version",
+    )
 
 
 def distribution_files(bundle: Path, project: dict[str, str]) -> list[Path]:
@@ -264,7 +305,8 @@ def check_installed(wheel: Path, version: str, checkout: Path) -> None:
     )
     distribution = importlib.metadata.distribution(PROJECT)
     require(
-        distribution.metadata["Name"] == PROJECT and distribution.version == version,
+        distribution.metadata["Name"] == PROJECT
+        and normalized_version(distribution.version) == normalized_version(version),
         "Installed metadata mismatch",
     )
     check_origin(Path(str(distribution.locate_file(""))), prefix, checkout)
@@ -293,7 +335,10 @@ def check_installed(wheel: Path, version: str, checkout: Path) -> None:
         check_origin(origin, prefix, checkout)
         origins[name] = str(origin)
         if name == "voice_forge":
-            require(module.__version__ == version, "Runtime version differs from wheel metadata")
+            require(
+                normalized_version(module.__version__) == normalized_version(version),
+                "Runtime version differs from wheel metadata",
+            )
     print(
         json.dumps(
             {"version": version, "wheel_sha256": sha256(wheel), "origins": origins}, sort_keys=True

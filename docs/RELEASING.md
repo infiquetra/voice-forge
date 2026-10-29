@@ -14,6 +14,40 @@ checked separately from the commit they identify. An unrelated successful main
 run cannot authorize a release. Tag qualification restores and saves no CI
 caches; PRs retain restore access and successful main pushes remain the writers.
 
+Release source admission also requires the tag's version to equal the project
+version. Wheel/sdist metadata and the installed runtime version must agree after
+the same normalization. This check runs before a tag can pass source admission,
+before manifest creation and again before a publisher can consume the bundle.
+
+The verifier deliberately supports a bounded PEP 440 release grammar with three
+ASCII integer components, optionally followed by an explicit numbered prerelease:
+
+```text
+X.Y.Z[SEP PHASE SEP N]
+SEP   = absent, "-", "_", or "." (independently at each position)
+PHASE = a, alpha, b, beta, or rc (case-insensitive)
+X, Y, Z, N = one or more ASCII digits
+```
+
+The tag has a literal lowercase `v` prefix. Numeric leading zeros are removed;
+`alpha` becomes `a`, `beta` becomes `b`, and prerelease letters become lowercase.
+For example, project `0.3.0-RC.01`, tag `v0.3.0-rc.1` and distribution metadata
+`0.3.0rc1` identify the same version. Distribution filenames and archive roots
+must use the normalized version. Equivalent metadata spellings compare by this
+normalization; duplicate Version fields still fail. Epochs, local/post/dev
+versions, extra/missing release components, implicit prerelease numbers,
+`c`/`pre`/`preview` aliases, whitespace and other forms fail closed. Supporting
+any of those requires a reviewed release-contract change. This bounded grammar
+implements the applicable [PEP 440 normalizations](https://packaging.python.org/en/latest/specifications/version-specifiers/#normalization)
+using the standard library, including before the build environment exists; it
+requires no runtime dependency or verifier tool bootstrap.
+
+Destination selection continues to use the original tag spelling: case-insensitive
+`-rc.`, `-alpha.` and `-beta.` markers select TestPyPI; other accepted spellings
+select PyPI. Thus `v0.3.0rc1` retains its existing PyPI route. Version normalization
+does not change this routing. PR/main qualification has no release tag to compare
+and still validates the project/distribution version contract.
+
 After the matrix succeeds, `release-qualification.yml` builds one wheel and one
 sdist using Hatchling 1.33.0 in a separate fresh build environment. It does not
 use the CI-only dependency lock or restore release artifacts/environments. The

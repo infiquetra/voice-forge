@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -58,14 +59,16 @@ def metadata(project):
     ).encode()
 
 
-def make_distributions(bundle, wheel_metadata=None, duplicate=False):
+def make_distributions(bundle, wheel_metadata=None, duplicate=False, sdist_metadata=None):
     project = release.project_metadata()
     stem = f"voice_forge_tts-{project['version']}"
     dist = bundle / "dist"
     dist.mkdir(parents=True, exist_ok=True)
     wheel = dist / f"{stem}-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr("voice_forge/__init__.py", b'__version__ = "0.3.0"\n')
+        archive.writestr(
+            "voice_forge/__init__.py", (release.ROOT / "src/voice_forge/__init__.py").read_bytes()
+        )
         archive.writestr(f"{stem}.dist-info/METADATA", wheel_metadata or metadata(project))
         if duplicate:
             with warnings.catch_warnings():
@@ -73,9 +76,11 @@ def make_distributions(bundle, wheel_metadata=None, duplicate=False):
                 archive.writestr("voice_forge/__init__.py", b"duplicate")
     with tarfile.open(dist / f"{stem}.tar.gz", "w:gz") as archive:
         for name, body in {
-            "PKG-INFO": metadata(project),
-            "pyproject.toml": (ROOT / "pyproject.toml").read_bytes(),
-            "src/voice_forge/__init__.py": (ROOT / "src/voice_forge/__init__.py").read_bytes(),
+            "PKG-INFO": sdist_metadata or metadata(project),
+            "pyproject.toml": (release.ROOT / "pyproject.toml").read_bytes(),
+            "src/voice_forge/__init__.py": (
+                release.ROOT / "src/voice_forge/__init__.py"
+            ).read_bytes(),
         }.items():
             member = tarfile.TarInfo(f"{stem}/{name}")
             member.size = len(body)
@@ -601,3 +606,211 @@ def test_tag_ci_cannot_restore_or_save_caches(candidate):
             assert not expression(condition, tag)
             assert not expression(condition, pr)
             assert expression(condition, main)
+
+
+def set_fixture_tag(candidate, monkeypatch, tag):
+    """Set synthetic event/ref lookups; never creates a Git tag."""
+    source, event, path, revisions = candidate
+    source["ref"] = f"refs/tags/{tag}"
+    event["ref"] = source["ref"]
+    path.write_text(json.dumps(event))
+    monkeypatch.setenv("GITHUB_REF", source["ref"])
+    revisions.update({source["ref"]: SHA, source["ref"] + "^{commit}": SHA})
+
+
+def test_wrong_tag_version_cannot_create_manifest(candidate, monkeypatch, tmp_path):
+    path = tmp_path / "wrong-version"
+    make_distributions(path)
+    set_fixture_tag(candidate, monkeypatch, "v9.9.9")
+    with pytest.raises(ValueError, match="tag version differs from project version"):
+        release.create_manifest(path)
+    assert not (path / release.MANIFEST).exists()
+
+
+def test_wrong_tag_version_cannot_publish_matching_project_distributions(
+    bundle, candidate, monkeypatch
+):
+    path, _, _ = bundle
+    set_fixture_tag(candidate, monkeypatch, "v9.9.9")
+    # Model the parent defect's producer binding an otherwise valid 0.3.0 bundle
+    # to this mismatched tag, including an independent matching manifest digest.
+    digest = rewrite_manifest(path, lambda m: m.update(source=candidate[0]))
+    with pytest.raises(ValueError, match="tag version differs from project version"):
+        release.publish_check(path, digest, "42", "success", "pypi")
+
+
+def fixture_project(tmp_path, monkeypatch, version):
+    """Disposable source/metadata fixtures, not built release or hosted evidence."""
+    root = tmp_path / "source-fixture"
+    (root / "src/voice_forge").mkdir(parents=True)
+    project = (
+        (ROOT / "pyproject.toml")
+        .read_text()
+        .replace('version = "0.3.0"', f'version = "{version}"', 1)
+    )
+    (root / "pyproject.toml").write_text(project)
+    (root / "src/voice_forge/__init__.py").write_text(f'__version__ = "{version}"\n')
+    monkeypatch.setattr(release, "ROOT", root)
+    return root
+
+
+@pytest.mark.parametrize(
+    "project_version,tag,canonical,destination",
+    [
+        ("0.3.0", "v0.3.0", "0.3.0", "pypi"),
+        ("00.03.00", "v0.3.0", "0.3.0", "pypi"),
+        ("0.3.0", "v00.03.00", "0.3.0", "pypi"),
+        ("0.3.0-rc.01", "v0.3.0-RC.1", "0.3.0rc1", "testpypi"),
+        ("0.3.0RC1", "v0.3.0-rc.01", "0.3.0rc1", "testpypi"),
+        ("0.3.0rc1", "v0.3.0-rc.1", "0.3.0rc1", "testpypi"),
+        ("0.3.0-alpha.01", "v0.3.0-AlPhA.1", "0.3.0a1", "testpypi"),
+        ("0.3.0a1", "v0.3.0-alpha.01", "0.3.0a1", "testpypi"),
+        ("0.3.0Beta01", "v0.3.0-BETA.1", "0.3.0b1", "testpypi"),
+        ("0.3.0b1", "v0.3.0-beta.01", "0.3.0b1", "testpypi"),
+        ("0.3.0rc1", "v0.3.0rc1", "0.3.0rc1", "pypi"),
+        ("0.3.0a1", "v0.3.0A1", "0.3.0a1", "pypi"),
+        ("0.3.0b1", "v0.3.0b1", "0.3.0b1", "pypi"),
+    ],
+)
+def test_normalized_tag_project_and_canonical_distributions_pass_real_admission(
+    candidate, monkeypatch, tmp_path, project_version, tag, canonical, destination
+):
+    fixture_project(tmp_path, monkeypatch, project_version)
+    set_fixture_tag(candidate, monkeypatch, tag)
+    assert release.project_metadata()["version"] == canonical
+    path = tmp_path / "normalized-bundle"
+    wheel = make_distributions(path)
+    assert canonical in wheel.name
+    digest = release.create_manifest(path)
+    assert release.verify_bundle(path, digest, "42") == wheel
+    release.publish_check(path, digest, "42", "success", destination)
+    graph = outcomes("publish.yml", candidate[0])
+    assert graph[f"publish-{destination}"] == "success"
+    assert graph[f"publish-{'pypi' if destination == 'testpypi' else 'testpypi'}"] == "skipped"
+
+
+@pytest.mark.parametrize(
+    "project_version,tag",
+    [
+        ("0.3.0rc1", "v0.3.0-rc.2"),
+        ("0.3.0rc1", "v0.3.0-beta.1"),
+        ("0.3.0a1", "v0.3.0-beta.1"),
+        ("0.3.0b1", "v0.3.0-alpha.1"),
+        ("0.3.0b1", "v0.3.0-beta.2"),
+        ("0.3.0rc1", "v0.3.0"),
+        ("0.3.0", "v0.3.0-rc.1"),
+    ],
+)
+def test_prerelease_flavor_number_or_final_mismatch_blocks_create_and_publish(
+    candidate, monkeypatch, tmp_path, project_version, tag
+):
+    fixture_project(tmp_path, monkeypatch, project_version)
+    set_fixture_tag(candidate, monkeypatch, f"v{project_version}")
+    path = tmp_path / "prerelease-bundle"
+    make_distributions(path)
+    release.create_manifest(path)
+    set_fixture_tag(candidate, monkeypatch, tag)
+    digest = rewrite_manifest(path, lambda m: m.update(source=candidate[0]))
+    for admit in (
+        lambda: release.create_manifest(path),
+        lambda: release.publish_check(
+            path, digest, "42", "success", release.release_destination(candidate[0])
+        ),
+    ):
+        with pytest.raises(ValueError, match="tag version differs from project version"):
+            admit()
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "",
+        "0.3",
+        "0.3.0.0",
+        "0!0.3.0",
+        "1!0.3.0",
+        "0.3.0+local",
+        "0.3.0.post1",
+        "0.3.0.dev1",
+        "0.3.0rc1.post1",
+        "0.3.0rc",
+        "0.3.0-preview1",
+        "0.3.0c1",
+        "0.3.0-r1",
+        "0.3.0-rc..1",
+        "0.3.0-rc.-1",
+        "0.3.0--rc.1",
+        "0.3.0rc1junk",
+        "0.3.0-rc.١",
+        "０.3.0",
+        " 0.3.0",
+        "0.3.0\n",
+        "v0.3.0",
+    ],
+)
+def test_malformed_or_unsupported_versions_rejected_by_source_gate(candidate, monkeypatch, version):
+    set_fixture_tag(candidate, monkeypatch, f"v{version}")
+    with pytest.raises(ValueError, match="Unsupported release version|Not a release tag"):
+        release.verify_source()
+
+
+@pytest.mark.parametrize("version", ["0.3.0.post1", "0.3.0rc", "0.3.0+local", "0.3"])
+def test_unsupported_project_version_fails_closed(tmp_path, monkeypatch, version):
+    fixture_project(tmp_path, monkeypatch, version)
+    with pytest.raises(ValueError, match="Unsupported release version"):
+        release.project_metadata()
+
+
+def test_supported_normalizations_agree_with_declared_packaging_tool():
+    # Packaging is already in the CI dev/build lock; production uses stdlib only.
+    for core in ("0.3.0", "00.03.00", "1.20.300"):
+        assert release.normalized_version(core) == str(Version(core))
+        for phase in ("a", "alpha", "b", "beta", "rc"):
+            for spelling in (phase, phase.upper(), phase.title()):
+                for before in ("", "-", "_", "."):
+                    for after in ("", "-", "_", "."):
+                        for number in ("0", "1", "001"):
+                            value = f"{core}{before}{spelling}{after}{number}"
+                            assert release.normalized_version(value) == str(Version(value))
+
+
+@pytest.mark.parametrize("target", ["wheel", "sdist"])
+def test_noncanonical_equivalent_distribution_metadata_is_compared_consistently(
+    candidate, monkeypatch, tmp_path, target
+):
+    fixture_project(tmp_path, monkeypatch, "0.3.0rc1")
+    set_fixture_tag(candidate, monkeypatch, "v0.3.0-RC.01")
+    project = dict(release.project_metadata(), version="00.03.00-RC.001")
+    path = tmp_path / "equivalent-metadata"
+    make_distributions(path, **{f"{target}_metadata": metadata(project)})
+    digest = release.create_manifest(path)
+    release.publish_check(path, digest, "42", "success", "testpypi")
+
+
+@pytest.mark.parametrize("target", ["wheel", "sdist"])
+@pytest.mark.parametrize("wrong", ["9.9.9", "0.3.0rc1", "0.3.0+local"])
+def test_source_and_distribution_version_disagreement_rejected(candidate, tmp_path, target, wrong):
+    project = dict(release.project_metadata(), version=wrong)
+    path = tmp_path / "wrong-metadata"
+    make_distributions(path, **{f"{target}_metadata": metadata(project)})
+    with pytest.raises(ValueError, match="Version|Unsupported release version"):
+        release.create_manifest(path)
+
+
+def test_changed_source_version_cannot_reuse_an_admitted_bundle(
+    bundle, candidate, tmp_path, monkeypatch
+):
+    path, _, digest = bundle
+    fixture_project(tmp_path, monkeypatch, "0.3.1")
+    with pytest.raises(ValueError, match="tag version differs from project version"):
+        release.publish_check(path, digest, "42", "success", "pypi")
+
+
+def test_installed_runtime_and_metadata_versions_normalize_consistently(installed):
+    wheel, _, distribution, module = installed
+    distribution.version = "0.3.0rc1"
+    module.__version__ = "00.03.00-RC.001"
+    release.check_installed(wheel, "0.3.0-rc.01", ROOT)
+    module.__version__ = "0.3.0rc2"
+    with pytest.raises(ValueError, match="Runtime version"):
+        release.check_installed(wheel, "0.3.0-rc.01", ROOT)
