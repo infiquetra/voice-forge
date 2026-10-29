@@ -25,6 +25,45 @@
 
 ---
 
+## 2026-10-29 (release source and artifact admission)
+
+### Independent producer outputs authenticate a distribution bundle
+
+**Context.** Tag publishing built distributions without first running full CI on
+the tagged commit or importing the built wheel outside the source checkout.
+
+**Mechanism.** A green main result can describe another commit. A checksum file
+shipped alongside replaced distributions can be replaced too. The pinned
+GitHub artifact downloader reports a digest mismatch as a warning, so that warning
+alone cannot prevent the next publication step.
+
+**Fix.** The tag workflow reuses the entire caller-context CI matrix, followed by
+the same non-publishing build/smoke workflow exercised on PRs. Every checkout is
+checked against caller SHA/ref/event identity. One build emits an immutable
+artifact ID and a manifest digest through producer outputs. Each consumer checks
+the manifest against that independent digest, checks its source/run/attempt and
+project metadata, and verifies the exact distribution inventory and bytes.
+Both supported interpreters install the exact wheel in fresh environments
+outside the checkout and check metadata, pip's recorded wheel hash and import
+origins. Publishers repeat admission and consume the same files. OIDC remains
+job-scoped to the existing two environments; the publishers gain only the narrow
+content-read capability needed for their verifier checkout. Tag CI is cold;
+PR restores and successful-main-only cache writers remain.
+
+**Validation boundary.** Focused executable controls exercise stale source/ref/run,
+wrong destination, altered wheel plus companion manifest, malformed inventories,
+metadata/import origin errors, and failed/cancelled/skipped gates expanded from
+the reusable workflow graph. These synthetic controls do not establish a real
+tag run. Hosted PR full-CI/build/smoke qualification and independent release-gate
+review remain acceptance requirements. Local evidence is kept outside source.
+The 10-minute CI deadline uses the observed roughly 20/73-second matrix sample;
+build/smoke/publish bounds are initial estimates pending hosted measurement.
+
+**Generalizable rule.** Carry an expected digest outside the artifact it
+protects, and bind both test qualification and artifact admission to the exact
+caller identity. Reverting a workflow does not unpublish a package version.
+See [release qualification and rollback](../RELEASING.md).
+
 ## 2026-10-29 (CI ownership and dependency lock)
 
 ### Compare effective hook environments before removing a named gate

@@ -36,4 +36,6 @@ the default with `python3`.
 Download and hook caches use platform, full interpreter version, uv version and
 lock/config/script hashes. Restore failures and misses still execute the entire
 installation and checks. Pull requests restore only; only successful `main`
-push jobs may save. There are no virtualenv caches or release cache consumers.
+push jobs may save. There are no virtualenv caches. Tag calls take a cold CI path with no restores
+or saves. The downstream distribution qualifier has fresh build/smoke
+environments and no cache actions; see [release qualification](../docs/RELEASING.md).
